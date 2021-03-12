@@ -74,7 +74,7 @@ func (rf *Raft) electWhenTimeout() {
 			return
 		}
 
-		if rf.myState() != LeaderState && rf.isElectTimeout() {
+		if !rf.IsLeader() && rf.isElectTimeout() {
 			rf.startElection()
 		}
 		rf.resetElectTimeout(true)

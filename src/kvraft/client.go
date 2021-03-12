@@ -1,13 +1,20 @@
 package kvraft
 
-import "../labrpc"
-import "crypto/rand"
-import "math/big"
+import (
+	"crypto/rand"
+	"math/big"
+	"reflect"
+	"sync/atomic"
+	"time"
 
+	"../labrpc"
+)
 
 type Clerk struct {
-	servers []*labrpc.ClientEnd
+	clientID string
+	servers  []*labrpc.ClientEnd
 	// You will have to modify this struct.
+	leader int32
 }
 
 func nrand() int64 {
@@ -20,6 +27,7 @@ func nrand() int64 {
 func MakeClerk(servers []*labrpc.ClientEnd) *Clerk {
 	ck := new(Clerk)
 	ck.servers = servers
+	ck.clientID = uuid()
 	// You'll have to add code here.
 	return ck
 }
@@ -37,9 +45,13 @@ func MakeClerk(servers []*labrpc.ClientEnd) *Clerk {
 // arguments. and reply must be passed as a pointer.
 //
 func (ck *Clerk) Get(key string) string {
-
-	// You will have to modify this function.
-	return ""
+	reply := &GetReply{}
+	res := ck.trySendToLeader("KVServer.Get", &GetArgs{ID: uuid(), Key: key}, reply)
+	reply = res.(*GetReply)
+	if reply.Err == ErrNoKey {
+		return ""
+	}
+	return reply.Value
 }
 
 //
@@ -53,12 +65,54 @@ func (ck *Clerk) Get(key string) string {
 // arguments. and reply must be passed as a pointer.
 //
 func (ck *Clerk) PutAppend(key string, value string, op string) {
-	// You will have to modify this function.
+	reply := &PutAppendReply{}
+	ck.trySendToLeader("KVServer.PutAppend", &PutAppendArgs{ID: uuid(), ClientID: ck.clientID, Key: key, Value: value, Op: op}, reply)
 }
 
 func (ck *Clerk) Put(key string, value string) {
-	ck.PutAppend(key, value, "Put")
+	ck.PutAppend(key, value, PUT)
 }
 func (ck *Clerk) Append(key string, value string) {
-	ck.PutAppend(key, value, "Append")
+	ck.PutAppend(key, value, APPEND)
+}
+
+type rpcResult struct {
+	reply interface{}
+	ok    bool
+}
+
+func (ck *Clerk) trySendToLeader(svcMeth string, args interface{}, reply Reply) interface{} {
+	leader := ck.curLeader()
+	result := make(chan *rpcResult)
+	for {
+		go func() {
+			reply := reflect.New(reflect.TypeOf(reply).Elem()).Interface()
+			result <- &rpcResult{
+				ok:    ck.servers[leader].Call(svcMeth, args, reply),
+				reply: reply,
+			}
+		}()
+
+		select {
+		case <-time.After(2 * time.Second):
+			// fmt.Printf("leader:%d timeout\n", leader)
+			leader = (leader + 1) % len(ck.servers)
+		case res := <-result:
+			if !res.ok || res.reply.(Reply).Error() == ErrWrongLeader {
+				// fmt.Printf("send to rpc error:%s\n", res.reply.(Reply).Error())
+				leader = (leader + 1) % len(ck.servers)
+			} else {
+				ck.ResetLeader(leader)
+				return res.reply
+			}
+		}
+	}
+}
+
+func (ck *Clerk) curLeader() int {
+	return int(atomic.LoadInt32(&ck.leader))
+}
+
+func (ck *Clerk) ResetLeader(leader int) {
+	atomic.StoreInt32(&ck.leader, int32(leader))
 }

@@ -1,15 +1,24 @@
 package kvraft
 
 import (
-	"../labgob"
-	"../labrpc"
+	// "fmt"
 	"log"
-	"../raft"
 	"sync"
 	"sync/atomic"
+	"time"
+
+	"../labgob"
+	"../labrpc"
+	"../raft"
 )
 
 const Debug = 0
+
+const (
+	GET    = "Get"
+	PUT    = "Put"
+	APPEND = "Append"
+)
 
 func DPrintf(format string, a ...interface{}) (n int, err error) {
 	if Debug > 0 {
@@ -18,11 +27,12 @@ func DPrintf(format string, a ...interface{}) (n int, err error) {
 	return
 }
 
-
 type Op struct {
-	// Your definitions here.
-	// Field names must start with capital letters,
-	// otherwise RPC will break.
+	ID       string
+	ClientID string
+	OpName   string
+	Key      string
+	Value    string
 }
 
 type KVServer struct {
@@ -35,15 +45,115 @@ type KVServer struct {
 	maxraftstate int // snapshot if log grows this big
 
 	// Your definitions here.
+	store        map[string]string
+	msgRegister  *sync.Map
 }
 
-
 func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
-	// Your code here.
+	kv.mu.Lock()
+	defer kv.mu.Unlock()
+
+	// fmt.Printf("peer %d get %s\n", kv.me, args.ID)
+	cmd := Op{ID: args.ID, OpName: GET, Key: args.Key}
+	if err := kv.startCommand(cmd); err != "" {
+		// fmt.Printf("peer %d get key start command err:%s id:%s store:%v\n", kv.me, err, args.ID, kv.store)
+		reply.Err = err
+		return
+	}
+
+	if val, ok := kv.store[args.Key]; !ok {
+		reply.Err = ErrNoKey
+		// fmt.Printf("finish get no key:%s, id:%s, store:%v\n", args.Key, args.ID, kv.store)
+	} else {
+		// fmt.Printf("finish get key:%s, id:%s, store:%v\n", args.Key, args.ID, kv.store)
+		reply.Err = OK
+		reply.Value = val
+	}
 }
 
 func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
-	// Your code here.
+	kv.mu.Lock()
+	defer kv.mu.Unlock()
+
+	cmd := Op{ID: args.ID, ClientID: args.ClientID, OpName: args.Op, Key: args.Key, Value: args.Value}
+	if err := kv.startCommand(cmd); err != "" {
+		reply.Err = err
+		return
+	}
+	reply.Err = OK
+}
+
+func (kv *KVServer) startCommand(cmd Op) Err {
+	if kv.rf.IsLeader() && kv.isProcessed(cmd) {
+		return ""
+	}
+
+	notifyCh := make(chan raft.ApplyMsg, 1)
+	kv.msgRegister.Store(notifyCh, true)
+	defer func() {
+		kv.msgRegister.Delete(notifyCh)
+	}()
+
+	_, term, leader := kv.rf.Start(cmd)
+	if !leader {
+		return ErrWrongLeader
+	}
+
+	for {
+		select {
+		case msg := <-notifyCh:
+			// fmt.Printf("got notify channel:%v\n", msg)
+			if msg.CommandTerm > term {
+				// fmt.Println("err wrong leader")
+				return ErrWrongLeader
+			} else {
+				return ""
+			}
+		case <-time.After(20 * time.Millisecond):
+			if kv.rf.MyTerm() > term {
+				// fmt.Printf("peer %d lose leader\n", kv.me)
+				return ErrWrongLeader
+			}
+		}
+	}
+}
+
+func (kv *KVServer) isProcessed(cmd Op) bool {
+	logs := kv.rf.Logs()
+	for i := len(logs) - 1; i >= 0; i-- {
+		op := logs[i].Data.(Op)
+		if op.OpName != GET && op.ClientID == cmd.ClientID {
+			if op.ID == cmd.ID {
+				return true
+			} else {
+				return false
+			}
+		}
+	}
+	return false
+}
+
+func (kv *KVServer) applyCommitLoop() {
+	for msg := range kv.applyCh {
+		cmd := msg.Command.(Op)
+		switch cmd.OpName {
+		case PUT:
+			kv.store[cmd.Key] = cmd.Value
+			// fmt.Printf("peer %d put key:%s val:%s, id:%s client_id:%s store:%v\n", kv.me, cmd.Key, cmd.Value, cmd.ID, cmd.ClientID, kv.store)
+		case APPEND:
+			kv.store[cmd.Key] += cmd.Value
+			// fmt.Printf("peer %d append key:%s val:%s, id:%s client_id:%s store:%v\n", kv.me, cmd.Key, cmd.Value, cmd.ID, cmd.ClientID, kv.store)
+		}
+
+		kv.msgRegister.Range(func(key, val interface{}) bool {
+			notifyCh := key.(chan raft.ApplyMsg)
+			select{
+			case notifyCh <- msg:
+			default:
+			}
+			return true
+		})
+	}
 }
 
 //
@@ -96,6 +206,9 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 	kv.rf = raft.Make(servers, me, persister, kv.applyCh)
 
 	// You may need initialization code here.
+	kv.store = make(map[string]string)
+	kv.msgRegister = new(sync.Map)
 
+	go kv.applyCommitLoop()
 	return kv
 }

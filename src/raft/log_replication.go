@@ -45,7 +45,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		rf.logs = append(rf.logs[:args.PrevLogIndex], args.Logs...)
 		if args.LeaderCommit > rf.commitIndex {
 			newCommitIndex := Mini(args.LeaderCommit, len(rf.logs))
-			rf.commitLog(newCommitIndex)
+			rf.commitLog(newCommitIndex, rf.currentTerm)
 		}
 	} else {
 		reply.Success = false
@@ -69,7 +69,7 @@ type appendReplyWithServer struct {
 }
 
 func (rf *Raft) leaderLoop() {
-	for !rf.killed() && rf.myState() == LeaderState {
+	for !rf.killed() && rf.IsLeader() {
 		argsList := rf.buildAppendEntriesArgs()
 		peerCnt := len(rf.peers) - 1
 		replies := make(chan *appendReplyWithServer, peerCnt)
@@ -118,6 +118,9 @@ func (rf *Raft) handleAppendEntriesReply(server int, args *AppendEntriesArgs, re
 		rf.nextIndexes[server] = reply.NextIndex
 	}
 
+	rf.mu.RLock()
+	defer rf.mu.RUnlock()
+
 	for n := rf.commitIndex + 1; n <= len(rf.logs); n++ {
 		cnt := 1
 		for server, matchIndex := range rf.matchIndexes {
@@ -125,15 +128,18 @@ func (rf *Raft) handleAppendEntriesReply(server int, args *AppendEntriesArgs, re
 				cnt++
 			}
 		}
-		if n > rf.commitIndex && cnt > len(rf.peers)/2 && rf.logs[n-1].Term == rf.myTerm() {
-			rf.commitLog(n)
+		curTerm := rf.MyTerm()
+		if n > rf.commitIndex && cnt > len(rf.peers)/2 && rf.logs[n-1].Term == curTerm {
+			rf.commitLog(n, curTerm)
 		}
 	}
 }
 
-func (rf *Raft) commitLog(newCommitIndex int) {
+func (rf *Raft) commitLog(newCommitIndex, term int) {
 	for index := rf.commitIndex + 1; index <= newCommitIndex; index++ {
-		rf.applyCh <- ApplyMsg{CommandValid: true, Command: rf.logs[index-1].Data, CommandIndex: index}
+		// fmt.Printf("peer:%d commit log term:%d, index:%d, data:%v\n", rf.me, term, index, rf.logs[index-1].Data)
+		rf.applyCh <- ApplyMsg{CommandValid: true, Command: rf.logs[index-1].Data, CommandIndex: index, CommandTerm: term}
+		// fmt.Printf("commit success\n")
 	}
 	rf.commitIndex = newCommitIndex
 }
@@ -146,6 +152,8 @@ func (rf *Raft) buildAppendEntriesArgs() []*AppendEntriesArgs {
 			continue
 		}
 
+		rf.mu.RLock()
+
 		prevLogTerm, prevLogIndex := 0, nextIndex-1
 		if prevLogIndex != 0 {
 			prevLogTerm = rf.logs[prevLogIndex-1].Term
@@ -156,8 +164,10 @@ func (rf *Raft) buildAppendEntriesArgs() []*AppendEntriesArgs {
 			sendLogs = rf.logs[nextIndex-1:]
 		}
 
+		rf.mu.RUnlock()
+
 		result[server] = &AppendEntriesArgs{
-			Term:         rf.myTerm(),
+			Term:         rf.MyTerm(),
 			LeaderID:     rf.me,
 			PrevLogTerm:  prevLogTerm,
 			PrevLogIndex: prevLogIndex,

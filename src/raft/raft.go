@@ -42,6 +42,7 @@ type ApplyMsg struct {
 	CommandValid bool
 	Command      interface{}
 	CommandIndex int
+	CommandTerm  int
 }
 
 type State int
@@ -57,14 +58,14 @@ const (
 // A Go object implementing a single Raft peer.
 //
 type Raft struct {
-	mu        sync.RWMutex        // Lock to protect shared access to this peer's state
-	peers     []*labrpc.ClientEnd // RPC end points of all peers
-	persister *Persister          // Object to hold this peer's persisted state
-	me        int                 // this peer's index into peers[]
-	dead      int32               // set by Kill()
-	state     State
-	timeout   int32
-	applyCh   chan ApplyMsg
+	mu          sync.RWMutex        // Lock to protect shared access to this peer's state
+	peers       []*labrpc.ClientEnd // RPC end points of all peers
+	persister   *Persister          // Object to hold this peer's persisted state
+	me          int                 // this peer's index into peers[]
+	dead        int32               // set by Kill()
+	state       State
+	timeout     int32
+	applyCh     chan ApplyMsg
 
 	// Your data here (2A, 2B, 2C).
 	// Look at the paper's Figure 2 for a description of what
@@ -231,18 +232,25 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	return rf
 }
 
-func (rf *Raft) myState() State {
+func (rf *Raft) IsLeader() bool {
 	rf.mu.RLock()
 	defer rf.mu.RUnlock()
 
-	return rf.state
+	return rf.state == LeaderState
 }
 
-func (rf *Raft) myTerm() int {
+func (rf *Raft) MyTerm() int {
 	rf.mu.RLock()
 	defer rf.mu.RUnlock()
 
 	return rf.currentTerm
+}
+
+func (rf *Raft) Logs() []*Log {
+	rf.mu.RLock()
+	defer rf.mu.RUnlock()
+
+	return rf.logs
 }
 
 func (rf *Raft) toFollower(newTerm int) {
