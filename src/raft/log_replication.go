@@ -37,26 +37,29 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 
 	reply.Term = rf.currentTerm
 	prevIndex := args.PrevLogIndex
-	if len(rf.logs) < prevIndex {
+	_, lastIndex := rf.lastLogTermIndex()
+	if lastIndex < prevIndex {
 		reply.Success = false
-		reply.NextIndex = len(rf.logs) + 1
-	} else if prevIndex == 0 || rf.logs[prevIndex-1].Term == args.PrevLogTerm {
+		reply.NextIndex = lastIndex + 1
+	} else if prevIndex == 0 || rf.logByIndex(prevIndex).Term == args.PrevLogTerm {
 		reply.Success = true
-		rf.logs = append(rf.logs[:args.PrevLogIndex], args.Logs...)
+		prevPos := rf.logPos(args.PrevLogIndex)
+		rf.logs = append(rf.logs[:prevPos+1], args.Logs...)
 		if args.LeaderCommit > rf.commitIndex {
-			newCommitIndex := Mini(args.LeaderCommit, len(rf.logs))
+			newCommitIndex := Mini(args.LeaderCommit, lastIndex)
 			rf.commitLog(newCommitIndex, rf.currentTerm)
 		}
 	} else {
 		reply.Success = false
-		index := prevIndex - 1
-		for ; index >= 1; index-- {
-			if rf.logs[index].Term != rf.logs[index-1].Term {
+		index := prevIndex
+		for ; index > 1; index-- {
+			if rf.logByIndex(index).Term != rf.logByIndex(index-1).Term {
 				break
 			}
 		}
-		reply.NextIndex = index + 1
-		rf.logs = rf.logs[:reply.NextIndex]
+		reply.NextIndex = index
+		nextPos := rf.logPos(index)
+		rf.logs = rf.logs[:nextPos]
 		reply.Success = false
 
 	}
@@ -121,15 +124,16 @@ func (rf *Raft) handleAppendEntriesReply(server int, args *AppendEntriesArgs, re
 	rf.mu.RLock()
 	defer rf.mu.RUnlock()
 
-	for n := rf.commitIndex + 1; n <= len(rf.logs); n++ {
+	_, lastIndex := rf.lastLogTermIndex()
+	for n := rf.commitIndex + 1; n <= lastIndex; n++ {
 		cnt := 1
 		for server, matchIndex := range rf.matchIndexes {
 			if matchIndex >= n && server != rf.me {
 				cnt++
 			}
 		}
-		curTerm := rf.MyTerm()
-		if n > rf.commitIndex && cnt > len(rf.peers)/2 && rf.logs[n-1].Term == curTerm {
+		curTerm := rf.currentTerm
+		if n > rf.commitIndex && cnt > len(rf.peers)/2 && rf.logByIndex(n).Term == curTerm {
 			rf.commitLog(n, curTerm)
 		}
 	}
@@ -137,9 +141,7 @@ func (rf *Raft) handleAppendEntriesReply(server int, args *AppendEntriesArgs, re
 
 func (rf *Raft) commitLog(newCommitIndex, term int) {
 	for index := rf.commitIndex + 1; index <= newCommitIndex; index++ {
-		// fmt.Printf("peer:%d commit log term:%d, index:%d, data:%v\n", rf.me, term, index, rf.logs[index-1].Data)
-		rf.applyCh <- ApplyMsg{CommandValid: true, Command: rf.logs[index-1].Data, CommandIndex: index, CommandTerm: term}
-		// fmt.Printf("commit success\n")
+		rf.applyCh <- ApplyMsg{CommandValid: true, Command: rf.logByIndex(index).Data, CommandIndex: index, CommandTerm: term}
 	}
 	rf.commitIndex = newCommitIndex
 }
@@ -154,14 +156,16 @@ func (rf *Raft) buildAppendEntriesArgs() []*AppendEntriesArgs {
 
 		rf.mu.RLock()
 
+		// todo 如果需要的log已经被截断了，直接发送快照
 		prevLogTerm, prevLogIndex := 0, nextIndex-1
 		if prevLogIndex != 0 {
-			prevLogTerm = rf.logs[prevLogIndex-1].Term
+			prevLogTerm = rf.logByIndex(prevLogIndex).Term
 		}
 
 		var sendLogs []*Log
-		if len(rf.logs) >= nextIndex {
-			sendLogs = rf.logs[nextIndex-1:]
+		_, lastLogIndex := rf.lastLogTermIndex()
+		if lastLogIndex >= nextIndex {
+			sendLogs = rf.logs[rf.logPos(nextIndex):]
 		}
 
 		rf.mu.RUnlock()

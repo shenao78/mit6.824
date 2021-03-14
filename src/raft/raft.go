@@ -58,21 +58,23 @@ const (
 // A Go object implementing a single Raft peer.
 //
 type Raft struct {
-	mu          sync.RWMutex        // Lock to protect shared access to this peer's state
-	peers       []*labrpc.ClientEnd // RPC end points of all peers
-	persister   *Persister          // Object to hold this peer's persisted state
-	me          int                 // this peer's index into peers[]
-	dead        int32               // set by Kill()
-	state       State
-	timeout     int32
-	applyCh     chan ApplyMsg
+	mu        sync.RWMutex        // Lock to protect shared access to this peer's state
+	peers     []*labrpc.ClientEnd // RPC end points of all peers
+	persister *Persister          // Object to hold this peer's persisted state
+	me        int                 // this peer's index into peers[]
+	dead      int32               // set by Kill()
+	state     State
+	timeout   int32
+	applyCh   chan ApplyMsg
 
 	// Your data here (2A, 2B, 2C).
 	// Look at the paper's Figure 2 for a description of what
 	// state a Raft server must maintain.
-	currentTerm int
-	votedFor    int
-	logs        []*Log
+	currentTerm       int
+	votedFor          int
+	logs              []*Log
+	lastIncludedTerm  int
+	lastIncludedIndex int
 
 	// volatile state
 	commitIndex int
@@ -110,6 +112,14 @@ func (rf *Raft) persist() {
 		log.Fatal("fail to persist current term")
 	}
 
+	if err := e.Encode(rf.lastIncludedTerm); err != nil {
+		log.Fatal("fail to persist last included term")
+	}
+
+	if err := e.Encode(rf.lastIncludedIndex); err != nil {
+		log.Fatal("fail to persist last included index")
+	}
+
 	if err := e.Encode(rf.votedFor); err != nil {
 		log.Fatal("fail to persist voted for")
 	}
@@ -133,12 +143,15 @@ func (rf *Raft) readPersist(data []byte) {
 	r := bytes.NewBuffer(data)
 	d := labgob.NewDecoder(r)
 
-	var currentTerm, votedFor int
+	var currentTerm, votedFor, lastIncludedTerm, lastIncludedIndex int
 	var logs []*Log
-	if d.Decode(&currentTerm) != nil || d.Decode(&votedFor) != nil || d.Decode(&logs) != nil {
+	if d.Decode(&currentTerm) != nil || d.Decode(&lastIncludedTerm) != nil || d.Decode(&lastIncludedIndex) != nil ||
+		d.Decode(&votedFor) != nil || d.Decode(&logs) != nil {
 		panic("fail to decode raft state")
 	} else {
 		rf.currentTerm = currentTerm
+		rf.lastIncludedTerm = lastIncludedTerm
+		rf.lastIncludedIndex = lastIncludedIndex
 		rf.votedFor = votedFor
 		rf.logs = logs
 	}
@@ -275,11 +288,20 @@ func (rf *Raft) toCandidate() {
 	rf.persist()
 }
 
+func (rf *Raft) logByIndex(index int) *Log {
+	return rf.logs[rf.logPos(index)]
+}
+
+func (rf *Raft) logPos(index int) int {
+	return index - rf.lastIncludedIndex - 1
+}
+
 func (rf *Raft) lastLogTermIndex() (int, int) {
-	term, index := 0, len(rf.logs)
+	term, index := rf.lastIncludedTerm, rf.lastIncludedIndex
 	if len(rf.logs) != 0 {
-		lastLog := rf.logs[index-1]
+		lastLog := rf.logs[len(rf.logs)-1]
 		term = lastLog.Term
+		index += len(rf.logs)
 	}
 	return term, index
 }

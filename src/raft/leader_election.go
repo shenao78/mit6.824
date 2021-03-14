@@ -53,10 +53,6 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 }
 
 func (rf *Raft) isNewerLog(lastLogTerm, lastLogIndex int) bool {
-	if len(rf.logs) == 0 {
-		return true
-	}
-
 	term, index := rf.lastLogTermIndex()
 	if lastLogTerm > term {
 		return true
