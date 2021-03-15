@@ -105,11 +105,19 @@ func (rf *Raft) GetState() (int, bool) {
 // see paper's Figure 2 for a description of what should be persistent.
 //
 func (rf *Raft) persist() {
+	rf.persister.SaveRaftState(rf.encodeState())
+}
+
+func (rf *Raft) encodeState() []byte {
 	w := new(bytes.Buffer)
 	e := labgob.NewEncoder(w)
 
 	if err := e.Encode(rf.currentTerm); err != nil {
 		log.Fatal("fail to persist current term")
+	}
+
+	if err := e.Encode(rf.commitIndex); err != nil {
+		log.Fatal("fail to persist commit index")
 	}
 
 	if err := e.Encode(rf.lastIncludedTerm); err != nil {
@@ -128,8 +136,7 @@ func (rf *Raft) persist() {
 		log.Fatal("fail to persist logs")
 	}
 
-	data := w.Bytes()
-	rf.persister.SaveRaftState(data)
+	return w.Bytes()
 }
 
 //
@@ -143,13 +150,14 @@ func (rf *Raft) readPersist(data []byte) {
 	r := bytes.NewBuffer(data)
 	d := labgob.NewDecoder(r)
 
-	var currentTerm, votedFor, lastIncludedTerm, lastIncludedIndex int
+	var currentTerm, commitIndex, votedFor, lastIncludedTerm, lastIncludedIndex int
 	var logs []*Log
-	if d.Decode(&currentTerm) != nil || d.Decode(&lastIncludedTerm) != nil || d.Decode(&lastIncludedIndex) != nil ||
-		d.Decode(&votedFor) != nil || d.Decode(&logs) != nil {
+	if d.Decode(&currentTerm) != nil || d.Decode(&commitIndex) != nil || d.Decode(&lastIncludedTerm) != nil ||
+		d.Decode(&lastIncludedIndex) != nil || d.Decode(&votedFor) != nil || d.Decode(&logs) != nil {
 		panic("fail to decode raft state")
 	} else {
 		rf.currentTerm = currentTerm
+		rf.commitIndex = commitIndex
 		rf.lastIncludedTerm = lastIncludedTerm
 		rf.lastIncludedIndex = lastIncludedIndex
 		rf.votedFor = votedFor
@@ -240,9 +248,23 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.readPersist(persister.ReadRaftState())
 	// initialize from state persisted before a crash
 	// rf.readPersist(persister.ReadRaftState())
-
+	go rf.initApplyCommands()
 	go rf.electWhenTimeout()
 	return rf
+}
+
+func (rf *Raft) initApplyCommands() {
+	for i, l := range rf.logs {
+		index := i + rf.lastIncludedIndex + 1
+		if index <= rf.commitIndex {
+			rf.applyCh <- ApplyMsg{
+				CommandValid: true,
+				Command:      l.Data,
+				CommandIndex: index,
+				CommandTerm:  l.Term,
+			}
+		}
+	}
 }
 
 func (rf *Raft) IsLeader() bool {

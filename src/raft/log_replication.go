@@ -53,7 +53,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		reply.Success = false
 		index := prevIndex
 		for ; index > 1; index-- {
-			if rf.logByIndex(index).Term != rf.logByIndex(index-1).Term {
+			if rf.logByIndex(index).Term != rf.logByIndex(index - 1).Term {
 				break
 			}
 		}
@@ -78,7 +78,7 @@ func (rf *Raft) leaderLoop() {
 		replies := make(chan *appendReplyWithServer, peerCnt)
 		for s, a := range argsList {
 			server, args := s, a
-			if server == rf.me {
+			if a == nil {
 				continue
 			}
 
@@ -156,17 +156,18 @@ func (rf *Raft) buildAppendEntriesArgs() []*AppendEntriesArgs {
 
 		rf.mu.RLock()
 
-		// todo 如果需要的log已经被截断了，直接发送快照
 		prevLogTerm, prevLogIndex := 0, nextIndex-1
 		if prevLogIndex != 0 {
 			prevLogTerm = rf.logByIndex(prevLogIndex).Term
 		}
 
-		var sendLogs []*Log
-		_, lastLogIndex := rf.lastLogTermIndex()
-		if lastLogIndex >= nextIndex {
-			sendLogs = rf.logs[rf.logPos(nextIndex):]
+		beginPos := rf.logPos(nextIndex)
+		if beginPos < 0 {
+			go rf.installSnapshot(server)
+			continue
 		}
+
+		sendLogs := rf.logs[rf.logPos(nextIndex):]
 
 		rf.mu.RUnlock()
 
@@ -180,6 +181,36 @@ func (rf *Raft) buildAppendEntriesArgs() []*AppendEntriesArgs {
 		}
 	}
 	return result
+}
+
+func (rf *Raft) installSnapshot(server int) {
+	args := &InstallSnapshotArgs{
+		Term:              rf.MyTerm(),
+		LeaderID:          rf.me,
+		LastIncludedIndex: rf.lastIncludedIndex,
+		lastIncludedTerm:  rf.lastIncludedTerm,
+		data:              rf.persister.snapshot,
+	}
+
+	result := make(chan *InstallSnapshotReply)
+	go func() {
+		reply := &InstallSnapshotReply{}
+		if ok := rf.sendInstallSnapshot(server, args, reply); !ok {
+			return
+		}
+		result <- reply
+	}()
+
+	select {
+	case <-time.After(10 * time.Millisecond):
+		return
+	case reply := <-result:
+		rf.mu.Lock()
+		if reply.Term > rf.currentTerm {
+			rf.toFollower(reply.Term)
+		}
+		rf.mu.Unlock()
+	}
 }
 
 func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *AppendEntriesReply) bool {

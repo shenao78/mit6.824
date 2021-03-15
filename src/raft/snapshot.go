@@ -12,11 +12,30 @@ type InstallSnapshotReply struct {
 	Term int
 }
 
-func (rf *Raft) Snapshot(index int, snapshot []byte) {
-	rf.persister.SaveRaftState(snapshot)
+func (rf *Raft) InstallSnapshot(args *InstallSnapshotArgs, reply *InstallSnapshotReply) {
+	rf.mu.RLock()
+	rf.mu.RUnlock()
 
+	reply.Term = rf.currentTerm
+	if args.Term < rf.currentTerm {
+		return
+	}
+
+	go func() {
+		rf.applyCh <- ApplyMsg{
+			CommandValid: true,
+			Command:      args.data,
+			CommandIndex: args.lastIncludedTerm,
+			CommandTerm:  args.LastIncludedIndex,
+		}
+	}()
+}
+
+func (rf *Raft) Snapshot(index int, snapshot []byte) {
 	rf.mu.Lock()
 	rf.mu.Unlock()
+
+	rf.persister.SaveStateAndSnapshot(rf.encodeState(), snapshot)
 
 	pos := rf.logPos(index)
 	tailLogs := rf.logs[pos+1:]
@@ -36,9 +55,14 @@ func (rf *Raft) CondInstallSnapshot(lastIncludedTerm int, lastIncludedIndex int,
 		return false
 	}
 
-	rf.persister.SaveRaftState(snapshot)
+	rf.persister.SaveStateAndSnapshot(rf.encodeState(), snapshot)
 	rf.lastIncludedTerm = lastIncludedTerm
 	rf.lastIncludedIndex = lastIncludedIndex
 	rf.logs = []*Log{}
 	return false
+}
+
+func (rf *Raft) sendInstallSnapshot(server int, args *InstallSnapshotArgs, reply *InstallSnapshotReply) bool {
+	ok := rf.peers[server].Call("Raft.InstallSnapshot", args, reply)
+	return ok
 }

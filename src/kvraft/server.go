@@ -1,6 +1,7 @@
 package kvraft
 
 import (
+	"encoding/json"
 	// "fmt"
 	"log"
 	"sync"
@@ -45,8 +46,8 @@ type KVServer struct {
 	maxraftstate int // snapshot if log grows this big
 
 	// Your definitions here.
-	store        map[string]string
-	msgRegister  *sync.Map
+	store       map[string]string
+	msgRegister *sync.Map
 }
 
 func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
@@ -102,16 +103,13 @@ func (kv *KVServer) startCommand(cmd Op) Err {
 	for {
 		select {
 		case msg := <-notifyCh:
-			// fmt.Printf("got notify channel:%v\n", msg)
 			if msg.CommandTerm > term {
-				// fmt.Println("err wrong leader")
 				return ErrWrongLeader
 			} else {
 				return ""
 			}
 		case <-time.After(20 * time.Millisecond):
 			if kv.rf.MyTerm() > term {
-				// fmt.Printf("peer %d lose leader\n", kv.me)
 				return ErrWrongLeader
 			}
 		}
@@ -135,25 +133,53 @@ func (kv *KVServer) isProcessed(cmd Op) bool {
 
 func (kv *KVServer) applyCommitLoop() {
 	for msg := range kv.applyCh {
-		cmd := msg.Command.(Op)
-		switch cmd.OpName {
-		case PUT:
-			kv.store[cmd.Key] = cmd.Value
-			// fmt.Printf("peer %d put key:%s val:%s, id:%s client_id:%s store:%v\n", kv.me, cmd.Key, cmd.Value, cmd.ID, cmd.ClientID, kv.store)
-		case APPEND:
-			kv.store[cmd.Key] += cmd.Value
-			// fmt.Printf("peer %d append key:%s val:%s, id:%s client_id:%s store:%v\n", kv.me, cmd.Key, cmd.Value, cmd.ID, cmd.ClientID, kv.store)
+		switch cmd := msg.Command.(type) {
+		case []byte:
+			kv.applySnapshot(msg)
+		case Op:
+			kv.applyCmd(cmd)
 		}
 
 		kv.msgRegister.Range(func(key, val interface{}) bool {
 			notifyCh := key.(chan raft.ApplyMsg)
-			select{
+			select {
 			case notifyCh <- msg:
 			default:
 			}
 			return true
 		})
 	}
+}
+
+func (kv *KVServer) applyCmd(cmd Op) {
+	switch cmd.OpName {
+	case PUT:
+		kv.store[cmd.Key] = cmd.Value
+		// fmt.Printf("peer %d put key:%s val:%s, id:%s client_id:%s store:%v\n", kv.me, cmd.Key, cmd.Value, cmd.ID, cmd.ClientID, kv.store)
+	case APPEND:
+		kv.store[cmd.Key] += cmd.Value
+		// fmt.Printf("peer %d append key:%s val:%s, id:%s client_id:%s store:%v\n", kv.me, cmd.Key, cmd.Value, cmd.ID, cmd.ClientID, kv.store)
+	}
+}
+
+func (kv *KVServer) applySnapshot(msg raft.ApplyMsg) {
+	snapshot := msg.Command.([]byte)
+	if ok := kv.rf.CondInstallSnapshot(msg.CommandTerm, msg.CommandIndex, snapshot); ok {
+		store := readStoreFromSnapshot(snapshot)
+		kv.mu.Lock()
+		kv.store = store
+		kv.mu.Unlock()
+	}
+}
+
+func readStoreFromSnapshot(snapshot []byte) map[string]string {
+	store := make(map[string]string)
+	if snapshot != nil {
+		if err := json.Unmarshal(snapshot, store); err != nil {
+			panic("fail to decode snapshot")
+		}
+	}
+	return store
 }
 
 //
@@ -201,13 +227,10 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 	kv.maxraftstate = maxraftstate
 
 	// You may need initialization code here.
-
 	kv.applyCh = make(chan raft.ApplyMsg)
 	kv.rf = raft.Make(servers, me, persister, kv.applyCh)
-
-	// You may need initialization code here.
-	kv.store = make(map[string]string)
 	kv.msgRegister = new(sync.Map)
+	kv.store = make(map[string]string)
 
 	go kv.applyCommitLoop()
 	return kv
