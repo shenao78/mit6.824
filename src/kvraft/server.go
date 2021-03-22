@@ -2,7 +2,6 @@ package kvraft
 
 import (
 	"encoding/json"
-	"fmt"
 	"log"
 	"sync"
 	"sync/atomic"
@@ -110,16 +109,12 @@ func (kv *KVServer) startCommand(cmd Op) Err {
 
 func (kv *KVServer) snapshotIfNeed() {
 	if kv.maxraftstate != -1 && kv.persister.RaftStateSize() > kv.maxraftstate {
-		kv.doSnapshot()
+		snapshot, _ := json.Marshal(&SnapshotData{
+			Store:        kv.store,
+			ProcessedMsg: kv.processedMsg,
+		})
+		kv.rf.Snapshot(kv.lastAppliedIndex, snapshot)
 	}
-}
-
-func (kv *KVServer) doSnapshot() {
-	snapshot, _ := json.Marshal(&SnapshotData{
-		Store:        kv.store,
-		ProcessedMsg: kv.processedMsg,
-	})
-	kv.rf.Snapshot(kv.lastAppliedIndex, snapshot)
 }
 
 func (kv *KVServer) applyCommitLoop() {
@@ -169,7 +164,6 @@ func (kv *KVServer) applySnapshot(msg raft.ApplyMsg) {
 		kv.store = snapshotData.Store
 		kv.processedMsg = snapshotData.ProcessedMsg
 		kv.lastAppliedIndex = msg.CommandIndex
-		fmt.Printf("peer:%d apply snapshot store:%v, lastAppliedIndex:%d\n", kv.me, kv.store, kv.lastAppliedIndex)
 		kv.mu.Unlock()
 	}
 }
