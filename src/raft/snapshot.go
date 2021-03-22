@@ -17,7 +17,6 @@ type InstallSnapshotReply struct {
 }
 
 func (rf *Raft) InstallSnapshot(args *InstallSnapshotArgs, reply *InstallSnapshotReply) {
-	// fmt.Println("receive install snapshot rpc")
 	rf.mu.RLock()
 	rf.mu.RUnlock()
 
@@ -64,7 +63,6 @@ func (rf *Raft) CondInstallSnapshot(lastIncludedTerm int, lastIncludedIndex int,
 	rf.commitIndex = lastIncludedIndex
 	rf.logs = []*Log{}
 	rf.persister.SaveStateAndSnapshot(rf.encodeState(), snapshot)
-	// fmt.Printf("peer %d install snapshot lastIncludedIndex:%d\n", rf.me, rf.lastIncludedIndex)
 	return true
 }
 
@@ -94,7 +92,6 @@ func (rf *Raft) installSnapshotToServer(server int) {
 		if reply.Term > rf.currentTerm {
 			rf.toFollower(reply.Term)
 		} else {
-			// fmt.Printf("update server %d next index=%d\n", server, args.LastIncludedIndex + 1)
 			rf.nextIndexes[server] = args.LastIncludedIndex + 1
 			rf.matchIndexes[server] = args.LastIncludedIndex
 		}
