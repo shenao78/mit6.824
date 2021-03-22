@@ -39,8 +39,9 @@ func (p *PutAppendReply) Error() Err {
 }
 
 type GetArgs struct {
-	ID  string
-	Key string
+	ID       string
+	ClientID string
+	Key      string
 	// You'll have to add definitions here.
 }
 
@@ -51,6 +52,11 @@ type GetReply struct {
 
 func (g *GetReply) Error() Err {
 	return g.Err
+}
+
+type SnapshotData struct {
+	Store        map[string]string
+	ProcessedMsg map[string]string
 }
 
 func uuid() string {

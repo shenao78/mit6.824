@@ -51,7 +51,6 @@ const (
 	FollowerState = iota
 	CandidateState
 	LeaderState
-	DeadState
 )
 
 //
@@ -160,6 +159,7 @@ func (rf *Raft) readPersist(data []byte) {
 		rf.commitIndex = commitIndex
 		rf.lastIncludedTerm = lastIncludedTerm
 		rf.lastIncludedIndex = lastIncludedIndex
+		// fmt.Printf("read last include index:%d, commit index:%d\n", lastIncludedIndex, commitIndex)
 		rf.votedFor = votedFor
 		rf.logs = logs
 	}
@@ -208,9 +208,6 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 // should call killed() to check whether it should stop.
 //
 func (rf *Raft) Kill() {
-	rf.mu.Lock()
-	rf.state = DeadState
-	rf.mu.Unlock()
 	atomic.StoreInt32(&rf.dead, 1)
 	// Your code here, if desired.
 }
@@ -296,6 +293,7 @@ func (rf *Raft) toFollower(newTerm int) {
 }
 
 func (rf *Raft) toLeader() {
+	// fmt.Printf("peer:%d become leader\n", rf.me)
 	rf.state = LeaderState
 	_, lastLogIndex := rf.lastLogTermIndex()
 	for i := range rf.nextIndexes {
@@ -304,6 +302,7 @@ func (rf *Raft) toLeader() {
 }
 
 func (rf *Raft) toCandidate() {
+	// fmt.Printf("peer:%d to candidate\n", rf.me)
 	rf.state = CandidateState
 	rf.currentTerm++
 	rf.votedFor = rf.me
@@ -326,4 +325,21 @@ func (rf *Raft) lastLogTermIndex() (int, int) {
 		index += len(rf.logs)
 	}
 	return term, index
+}
+
+func (rf *Raft) LastIncludedIndex() int {
+	return rf.lastIncludedIndex
+}
+
+func (rf *Raft) termOfIndex(index int) int {
+	_, lastIndex := rf.lastLogTermIndex()
+	if index > lastIndex {
+		return -1
+	}
+
+	if index == rf.lastIncludedIndex {
+		return rf.lastIncludedTerm
+	}
+
+	return rf.logByIndex(index).Term
 }

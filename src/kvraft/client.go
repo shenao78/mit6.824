@@ -46,7 +46,8 @@ func MakeClerk(servers []*labrpc.ClientEnd) *Clerk {
 //
 func (ck *Clerk) Get(key string) string {
 	reply := &GetReply{}
-	res := ck.trySendToLeader("KVServer.Get", &GetArgs{ID: uuid(), Key: key}, reply)
+	args := &GetArgs{ID: uuid(), ClientID: uuid(), Key: key}
+	res := ck.trySendToLeader("KVServer.Get", args, reply)
 	reply = res.(*GetReply)
 	if reply.Err == ErrNoKey {
 		return ""
@@ -95,11 +96,9 @@ func (ck *Clerk) trySendToLeader(svcMeth string, args interface{}, reply Reply) 
 
 		select {
 		case <-time.After(2 * time.Second):
-			// fmt.Printf("leader:%d timeout\n", leader)
 			leader = (leader + 1) % len(ck.servers)
 		case res := <-result:
 			if !res.ok || res.reply.(Reply).Error() == ErrWrongLeader {
-				// fmt.Printf("send to rpc error:%s\n", res.reply.(Reply).Error())
 				leader = (leader + 1) % len(ck.servers)
 			} else {
 				ck.ResetLeader(leader)

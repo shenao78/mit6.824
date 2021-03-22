@@ -36,12 +36,17 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	}
 
 	reply.Term = rf.currentTerm
+	if args.PrevLogIndex + 1 <= rf.lastIncludedIndex {
+		reply.Success = true
+		return
+	}
+
 	prevIndex := args.PrevLogIndex
 	_, lastIndex := rf.lastLogTermIndex()
 	if lastIndex < prevIndex {
 		reply.Success = false
 		reply.NextIndex = lastIndex + 1
-	} else if prevIndex == 0 || rf.logByIndex(prevIndex).Term == args.PrevLogTerm {
+	} else if prevIndex == 0 || rf.termOfIndex(prevIndex) == args.PrevLogTerm {
 		reply.Success = true
 		prevPos := rf.logPos(args.PrevLogIndex)
 		rf.logs = append(rf.logs[:prevPos+1], args.Logs...)
@@ -52,7 +57,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	} else {
 		reply.Success = false
 		index := prevIndex
-		for ; index > 1; index-- {
+		for ; rf.logPos(index-1) > 0; index-- {
 			if rf.logByIndex(index).Term != rf.logByIndex(index - 1).Term {
 				break
 			}
@@ -74,14 +79,15 @@ type appendReplyWithServer struct {
 func (rf *Raft) leaderLoop() {
 	for !rf.killed() && rf.IsLeader() {
 		argsList := rf.buildAppendEntriesArgs()
-		peerCnt := len(rf.peers) - 1
-		replies := make(chan *appendReplyWithServer, peerCnt)
+		sendCnt := 0
+		replies := make(chan *appendReplyWithServer, len(rf.peers))
 		for s, a := range argsList {
 			server, args := s, a
 			if a == nil {
 				continue
 			}
 
+			sendCnt++
 			go func() {
 				reply := &AppendEntriesReply{}
 				if ok := rf.sendAppendEntries(server, args, reply); !ok {
@@ -92,7 +98,7 @@ func (rf *Raft) leaderLoop() {
 		}
 		replyCnt := 0
 	Out:
-		for replyCnt < peerCnt {
+		for replyCnt < sendCnt {
 			select {
 			case <-time.After(10 * time.Millisecond):
 				break Out
@@ -148,68 +154,39 @@ func (rf *Raft) commitLog(newCommitIndex, term int) {
 
 func (rf *Raft) buildAppendEntriesArgs() []*AppendEntriesArgs {
 	result := make([]*AppendEntriesArgs, len(rf.peers))
-	commitIndex := rf.commitIndex
 	for server, nextIndex := range rf.nextIndexes {
 		if server == rf.me {
 			continue
 		}
 
-		rf.mu.RLock()
-
-		prevLogTerm, prevLogIndex := 0, nextIndex-1
-		if prevLogIndex != 0 {
-			prevLogTerm = rf.logByIndex(prevLogIndex).Term
-		}
-
-		beginPos := rf.logPos(nextIndex)
-		if beginPos < 0 {
-			go rf.installSnapshot(server)
-			continue
-		}
-
-		sendLogs := rf.logs[rf.logPos(nextIndex):]
-
-		rf.mu.RUnlock()
-
-		result[server] = &AppendEntriesArgs{
-			Term:         rf.MyTerm(),
-			LeaderID:     rf.me,
-			PrevLogTerm:  prevLogTerm,
-			PrevLogIndex: prevLogIndex,
-			Logs:         sendLogs,
-			LeaderCommit: commitIndex,
-		}
+		result[server] = rf.buildAppendEntriesArg(server, nextIndex)
 	}
 	return result
 }
 
-func (rf *Raft) installSnapshot(server int) {
-	args := &InstallSnapshotArgs{
-		Term:              rf.MyTerm(),
-		LeaderID:          rf.me,
-		LastIncludedIndex: rf.lastIncludedIndex,
-		lastIncludedTerm:  rf.lastIncludedTerm,
-		data:              rf.persister.snapshot,
+func (rf *Raft) buildAppendEntriesArg(server, nextIndex int) *AppendEntriesArgs {
+	rf.mu.RLock()
+	defer rf.mu.RUnlock()
+
+	beginPos := rf.logPos(nextIndex)
+	if beginPos < 0 {
+		go rf.installSnapshotToServer(server)
+		return nil
 	}
 
-	result := make(chan *InstallSnapshotReply)
-	go func() {
-		reply := &InstallSnapshotReply{}
-		if ok := rf.sendInstallSnapshot(server, args, reply); !ok {
-			return
-		}
-		result <- reply
-	}()
+	prevLogTerm, prevLogIndex := rf.lastIncludedTerm, nextIndex-1
+	if prevLogIndex != 0 && beginPos > 0 {
+		prevLogTerm = rf.logByIndex(prevLogIndex).Term
+	}
 
-	select {
-	case <-time.After(10 * time.Millisecond):
-		return
-	case reply := <-result:
-		rf.mu.Lock()
-		if reply.Term > rf.currentTerm {
-			rf.toFollower(reply.Term)
-		}
-		rf.mu.Unlock()
+	sendLogs := rf.logs[rf.logPos(nextIndex):]
+	return &AppendEntriesArgs{
+		Term:         rf.MyTerm(),
+		LeaderID:     rf.me,
+		PrevLogTerm:  prevLogTerm,
+		PrevLogIndex: prevLogIndex,
+		Logs:         sendLogs,
+		LeaderCommit: rf.commitIndex,
 	}
 }
 
