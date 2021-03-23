@@ -67,7 +67,8 @@ func (ck *Clerk) Get(key string) string {
 //
 func (ck *Clerk) PutAppend(key string, value string, op string) {
 	reply := &PutAppendReply{}
-	ck.trySendToLeader("KVServer.PutAppend", &PutAppendArgs{ID: uuid(), ClientID: ck.clientID, Key: key, Value: value, Op: op}, reply)
+	args := &PutAppendArgs{ID: uuid(), ClientID: ck.clientID, Key: key, Value: value, Op: op}
+	ck.trySendToLeader("KVServer.PutAppend", args, reply)
 }
 
 func (ck *Clerk) Put(key string, value string) {
@@ -101,7 +102,7 @@ func (ck *Clerk) trySendToLeader(svcMeth string, args interface{}, reply Reply) 
 			if !res.ok || res.reply.(Reply).Error() == ErrWrongLeader {
 				leader = (leader + 1) % len(ck.servers)
 			} else {
-				ck.ResetLeader(leader)
+				ck.resetLeader(leader)
 				return res.reply
 			}
 		}
@@ -112,6 +113,6 @@ func (ck *Clerk) curLeader() int {
 	return int(atomic.LoadInt32(&ck.leader))
 }
 
-func (ck *Clerk) ResetLeader(leader int) {
+func (ck *Clerk) resetLeader(leader int) {
 	atomic.StoreInt32(&ck.leader, int32(leader))
 }

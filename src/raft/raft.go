@@ -116,23 +116,23 @@ func (rf *Raft) encodeState() []byte {
 	}
 
 	if err := e.Encode(rf.commitIndex); err != nil {
-		log.Fatal("fail to persist commit index")
+		log.Fatal(err, "fail to persist commit index")
 	}
 
 	if err := e.Encode(rf.lastIncludedTerm); err != nil {
-		log.Fatal("fail to persist last included term")
+		log.Fatal(err, "fail to persist last included term")
 	}
 
 	if err := e.Encode(rf.lastIncludedIndex); err != nil {
-		log.Fatal("fail to persist last included index")
+		log.Fatal(err, "fail to persist last included index")
 	}
 
 	if err := e.Encode(rf.votedFor); err != nil {
-		log.Fatal("fail to persist voted for")
+		log.Fatal(err, "fail to persist voted for")
 	}
 
 	if err := e.Encode(rf.logs); err != nil {
-		log.Fatal("fail to persist logs")
+		log.Fatal(err, "fail to persist logs")
 	}
 
 	return w.Bytes()
