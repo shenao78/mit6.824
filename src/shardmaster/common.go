@@ -41,12 +41,63 @@ type Config struct {
 	Groups map[int][]string // gid -> servers[]
 }
 
-func (c Config) copyGroups() map[int][]string {
-	groups := make(map[int][]string)
-	for gid, servers := range c.Groups {
-		groups[gid] = servers
+func (c Config) copy() Config {
+	var shards [NShards]int
+	for s, g := range c.Shards {
+		shards[s] = g
 	}
-	return groups
+
+	groups := make(map[int][]string)
+	for g, s := range c.Groups {
+		groups[g] = s
+	}
+
+	return Config{
+		Num:    c.Num,
+		Shards: shards,
+		Groups: groups,
+	}
+}
+
+func (c *Config) reloadBalance() {
+	c.Shards = reloadBalance(c.toShardsList(), c.orphanShards())
+}
+
+type gidToShards struct {
+	gid    int
+	shards []int
+}
+
+func (c *Config) toShardsList() []*gidToShards {
+	gidToShardsMap := make(map[int][]int)
+	for shard, gid := range c.Shards {
+		if _, ok := c.Groups[gid]; ok {
+			gidToShardsMap[gid] = append(gidToShardsMap[gid], shard)
+		}
+	}
+
+	for gid := range c.Groups {
+		if _, ok := gidToShardsMap[gid]; !ok {
+			gidToShardsMap[gid] = []int{}
+		}
+	}
+
+	var gidToShardsList []*gidToShards
+	for gid, shards := range gidToShardsMap {
+		gidToShardsList = append(gidToShardsList, &gidToShards{gid: gid, shards: shards})
+	}
+	return gidToShardsList
+}
+
+func (c *Config) orphanShards() []int {
+	var orphanShards []int
+	for shard, gid := range c.Shards {
+		if _, ok := c.Groups[gid]; !ok {
+			orphanShards = append(orphanShards, shard)
+		}
+	}
+
+	return orphanShards
 }
 
 type JoinArgs struct {

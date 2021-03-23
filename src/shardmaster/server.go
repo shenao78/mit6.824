@@ -44,33 +44,15 @@ func (sm *ShardMaster) Join(args *JoinArgs, reply *JoinReply) {
 }
 
 func (sm *ShardMaster) handleJoin(req Op) {
-	var orphanShards []int
-	gidToShardsMap := make(map[int][]int)
-	for shard, gid := range sm.latestConfig().Shards {
-		if _, ok := sm.latestConfig().Groups[gid]; !ok {
-			orphanShards = append(orphanShards, shard)
-		} else {
-			gidToShardsMap[gid] = append(gidToShardsMap[gid], shard)
-		}
-	}
+	config := sm.latestConfig().copy()
+	config.Num++
 
-	groups := sm.latestConfig().copyGroups()
 	for gid, servers := range req.Servers {
-		gidToShardsMap[gid] = []int{}
-		groups[gid] = servers
+		config.Groups[gid] = servers
 	}
 
-	var gidToShardsList []*gidToShards
-	for gid, shards := range gidToShardsMap {
-		gidToShardsList = append(gidToShardsList, &gidToShards{gid: gid, shards: shards})
-	}
-
-	shards := reloadBalance(gidToShardsList, orphanShards)
-	sm.configs = append(sm.configs, Config{
-		Num:    len(sm.configs),
-		Shards: shards,
-		Groups: groups,
-	})
+	config.reloadBalance()
+	sm.configs = append(sm.configs, config)
 }
 
 type LeaveReq struct {
@@ -85,45 +67,15 @@ func (sm *ShardMaster) Leave(args *LeaveArgs, reply *LeaveReply) {
 }
 
 func (sm *ShardMaster) handleLeave(req Op) {
-	delGidMap := make(map[int]bool)
-	groups := sm.latestConfig().copyGroups()
+	config := sm.latestConfig().copy()
+	config.Num++
+
 	for _, gid := range req.GIDs {
-		delete(groups, gid)
-		delGidMap[gid] = true
+		delete(config.Groups, gid)
 	}
 
-	gidToShardsMap := make(map[int][]int)
-	var orphanShards []int
-	for shard, gid := range sm.latestConfig().Shards {
-		if delGidMap[gid] {
-			orphanShards = append(orphanShards, shard)
-		} else {
-			gidToShardsMap[gid] = append(gidToShardsMap[gid], shard)
-		}
-	}
-
-	for gid := range groups {
-		if _, ok := gidToShardsMap[gid]; !ok {
-			gidToShardsMap[gid] = []int{}
-		}
-	}
-
-	var gidToShardsList []*gidToShards
-	for gid, shards := range gidToShardsMap {
-		gidToShardsList = append(gidToShardsList, &gidToShards{gid: gid, shards: shards})
-	}
-
-	shards := reloadBalance(gidToShardsList, orphanShards)
-	sm.configs = append(sm.configs, Config{
-		Num:    len(sm.configs),
-		Shards: shards,
-		Groups: groups,
-	})
-}
-
-type gidToShards struct {
-	gid    int
-	shards []int
+	config.reloadBalance()
+	sm.configs = append(sm.configs, config)
 }
 
 func reloadBalance(gidToShardsList []*gidToShards, orphanShards []int) [NShards]int {
@@ -189,16 +141,11 @@ func (sm *ShardMaster) Move(args *MoveArgs, reply *MoveReply) {
 }
 
 func (sm *ShardMaster) handleMove(req Op) {
-	latestConfig := sm.latestConfig()
-	shards := [NShards]int{}
-	copy(shards[:], latestConfig.Shards[:])
-	shards[req.Shard] = req.GID
+	config := sm.latestConfig().copy()
+	config.Num++
+	config.Shards[req.Shard] = req.GID
 
-	sm.configs = append(sm.configs, Config{
-		Num:    len(sm.configs),
-		Shards: shards,
-		Groups: latestConfig.copyGroups(),
-	})
+	sm.configs = append(sm.configs, config)
 }
 
 func (sm *ShardMaster) latestConfig() Config {
