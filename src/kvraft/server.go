@@ -2,6 +2,7 @@ package kvraft
 
 import (
 	"encoding/json"
+	"fmt"
 	"log"
 	"sync"
 	"sync/atomic"
@@ -28,8 +29,8 @@ func DPrintf(format string, a ...interface{}) (n int, err error) {
 }
 
 type Op struct {
-	ID       string
-	ClientID string
+	ID       int32
+	ClientID int32
 	OpName   string
 	Key      string
 	Value    string
@@ -49,7 +50,7 @@ type KVServer struct {
 	store            map[string]string
 	lastAppliedIndex int
 	msgRegister      *sync.Map
-	processedMsg     map[string]string
+	processedMsg     map[int32]int32
 }
 
 func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
@@ -113,6 +114,7 @@ func (kv *KVServer) snapshotIfNeed() {
 			Store:        kv.store,
 			ProcessedMsg: kv.processedMsg,
 		})
+		fmt.Printf("snapshot size:%d, %v\n", len(snapshot), kv.processedMsg)
 		kv.rf.Snapshot(kv.lastAppliedIndex, snapshot)
 	}
 }
@@ -171,7 +173,7 @@ func (kv *KVServer) applySnapshot(msg raft.ApplyMsg) {
 func readStoreFromSnapshot(snapshot []byte) *SnapshotData {
 	snapshotData := &SnapshotData{
 		Store:        make(map[string]string),
-		ProcessedMsg: make(map[string]string),
+		ProcessedMsg: make(map[int32]int32),
 	}
 	if snapshot != nil {
 		if err := json.Unmarshal(snapshot, &snapshotData); err != nil {

@@ -11,7 +11,7 @@ import (
 )
 
 type Clerk struct {
-	clientID string
+	clientID int32
 	servers  []*labrpc.ClientEnd
 	// You will have to modify this struct.
 	leader int32
@@ -27,7 +27,7 @@ func nrand() int64 {
 func MakeClerk(servers []*labrpc.ClientEnd) *Clerk {
 	ck := new(Clerk)
 	ck.servers = servers
-	ck.clientID = uuid()
+	ck.clientID = newClientID()
 	// You'll have to add code here.
 	return ck
 }
@@ -46,7 +46,7 @@ func MakeClerk(servers []*labrpc.ClientEnd) *Clerk {
 //
 func (ck *Clerk) Get(key string) string {
 	reply := &GetReply{}
-	args := &GetArgs{ID: uuid(), ClientID: uuid(), Key: key}
+	args := &GetArgs{ID: newReqID(), ClientID: ck.clientID, Key: key}
 	res := ck.trySendToLeader("KVServer.Get", args, reply)
 	reply = res.(*GetReply)
 	if reply.Err == ErrNoKey {
@@ -67,7 +67,7 @@ func (ck *Clerk) Get(key string) string {
 //
 func (ck *Clerk) PutAppend(key string, value string, op string) {
 	reply := &PutAppendReply{}
-	args := &PutAppendArgs{ID: uuid(), ClientID: ck.clientID, Key: key, Value: value, Op: op}
+	args := &PutAppendArgs{ID: newReqID(), ClientID: ck.clientID, Key: key, Value: value, Op: op}
 	ck.trySendToLeader("KVServer.PutAppend", args, reply)
 }
 
