@@ -1,22 +1,33 @@
 package shardkv
 
-
 // import "../shardmaster"
-import "../labrpc"
-import "../raft"
-import "sync"
-import "../labgob"
+import (
+	"encoding/json"
+	"sync"
+	"time"
 
+	"../labgob"
+	"../labrpc"
+	"../raft"
+	"../shardmaster"
+)
 
+const (
+	GET    = "Get"
+	PUT    = "Put"
+	APPEND = "Append"
+)
 
 type Op struct {
-	// Your definitions here.
-	// Field names must start with capital letters,
-	// otherwise RPC will break.
+	ID       string
+	ClientID string
+	OpName   string
+	Key      string
+	Value    string
 }
 
 type ShardKV struct {
-	mu           sync.Mutex
+	mu           sync.RWMutex
 	me           int
 	rf           *raft.Raft
 	applyCh      chan raft.ApplyMsg
@@ -24,17 +35,162 @@ type ShardKV struct {
 	gid          int
 	masters      []*labrpc.ClientEnd
 	maxraftstate int // snapshot if log grows this big
+	persister    *raft.Persister
+	sm           *shardmaster.Clerk
 
 	// Your definitions here.
+	config           *shardmaster.Config
+	store            map[string]string
+	lastAppliedIndex int
+	msgRegister      *sync.Map
+	processedMsg     map[string]string
 }
 
-
 func (kv *ShardKV) Get(args *GetArgs, reply *GetReply) {
-	// Your code here.
+	if kv.isWrongGroup(args.Key) {
+		reply.Err = ErrWrongGroup
+		return
+	}
+
+	cmd := Op{ID: args.ID, ClientID: args.ClientID, OpName: GET, Key: args.Key}
+	if err := kv.startCommand(cmd); err != OK {
+		reply.Err = err
+		return
+	}
+
+	kv.mu.RLock()
+	defer kv.mu.RUnlock()
+
+	if val, ok := kv.store[args.Key]; !ok {
+		reply.Err = ErrNoKey
+	} else {
+		reply.Err = OK
+		reply.Value = val
+	}
 }
 
 func (kv *ShardKV) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
-	// Your code here.
+	if kv.isWrongGroup(args.Key) {
+		reply.Err = ErrWrongGroup
+		return
+	}
+
+	cmd := Op{ID: args.ID, ClientID: args.ClientID, OpName: args.Op, Key: args.Key, Value: args.Value}
+	if err := kv.startCommand(cmd); err != OK {
+		reply.Err = err
+		return
+	}
+	reply.Err = OK
+}
+
+func (kv *ShardKV) isWrongGroup(key string) bool {
+	shard := key2shard(key)
+
+	kv.mu.RLock()
+	kv.mu.RUnlock()
+	return kv.config != nil && kv.config.Shards[shard] != kv.gid
+}
+
+func (kv *ShardKV) startCommand(cmd Op) Err {
+	notifyCh := make(chan raft.ApplyMsg, 1)
+	kv.msgRegister.Store(cmd.ID, notifyCh)
+	defer func() {
+		kv.msgRegister.Delete(cmd.ID)
+	}()
+
+	_, term, leader := kv.rf.Start(cmd)
+	if !leader {
+		return ErrWrongLeader
+	}
+
+	for {
+		select {
+		case msg := <-notifyCh:
+			if msg.CommandTerm > term {
+				return ErrWrongLeader
+			} else {
+				return OK
+			}
+		case <-time.After(20 * time.Millisecond):
+			if kv.rf.MyTerm() > term {
+				return ErrWrongLeader
+			}
+		}
+	}
+}
+
+func (kv *ShardKV) snapshotIfNeed() {
+	if kv.maxraftstate != -1 && kv.persister.RaftStateSize() > kv.maxraftstate {
+		snapshot, _ := json.Marshal(&SnapshotData{
+			Store:        kv.store,
+			ProcessedMsg: kv.processedMsg,
+		})
+		kv.rf.Snapshot(kv.lastAppliedIndex, snapshot)
+	}
+}
+
+func (kv *ShardKV) applyCommitLoop() {
+	for msg := range kv.applyCh {
+		switch msg.Command.(type) {
+		case []byte:
+			kv.applySnapshot(msg)
+		case Op:
+			kv.applyCmd(msg)
+		}
+	}
+}
+
+func (kv *ShardKV) applyCmd(msg raft.ApplyMsg) {
+	kv.mu.Lock()
+	defer kv.mu.Unlock()
+
+	kv.lastAppliedIndex = msg.CommandIndex
+
+	cmd := msg.Command.(Op)
+	if kv.processedMsg[cmd.ClientID] != cmd.ID {
+		switch cmd.OpName {
+		case PUT:
+			kv.store[cmd.Key] = cmd.Value
+		case APPEND:
+			kv.store[cmd.Key] += cmd.Value
+		}
+		kv.processedMsg[cmd.ClientID] = cmd.ID
+	}
+
+	kv.snapshotIfNeed()
+
+	if val, ok := kv.msgRegister.Load(cmd.ID); ok {
+		notifyCh := val.(chan raft.ApplyMsg)
+		select {
+		case notifyCh <- msg:
+		default:
+		}
+	}
+}
+
+func (kv *ShardKV) applySnapshot(msg raft.ApplyMsg) {
+	snapshot := msg.Command.([]byte)
+	if ok := kv.rf.CondInstallSnapshot(msg.CommandTerm, msg.CommandIndex, snapshot); ok {
+		snapshotData := readStoreFromSnapshot(snapshot)
+		kv.mu.Lock()
+		kv.store = snapshotData.Store
+		kv.processedMsg = snapshotData.ProcessedMsg
+		kv.lastAppliedIndex = msg.CommandIndex
+		kv.mu.Unlock()
+	}
+}
+
+func readStoreFromSnapshot(snapshot []byte) *SnapshotData {
+	snapshotData := &SnapshotData{
+		Store:        make(map[string]string),
+		ProcessedMsg: make(map[string]string),
+	}
+	if snapshot != nil {
+		if err := json.Unmarshal(snapshot, &snapshotData); err != nil {
+			panic("fail to decode snapshot")
+		}
+	}
+	return snapshotData
 }
 
 //
@@ -48,6 +204,18 @@ func (kv *ShardKV) Kill() {
 	// Your code here, if desired.
 }
 
+func (kv *ShardKV) detectRegisterServer() {
+	for {
+		config := kv.sm.Query(-1)
+		if _, ok := config.Groups[kv.gid]; ok {
+			kv.mu.Lock()
+			kv.config = &config
+			kv.mu.Unlock()
+			return
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+}
 
 //
 // servers[] contains the ports of the servers in this group.
@@ -94,9 +262,19 @@ func StartServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persister,
 	// Use something like this to talk to the shardmaster:
 	// kv.mck = shardmaster.MakeClerk(kv.masters)
 
-	kv.applyCh = make(chan raft.ApplyMsg)
+	kv.applyCh = make(chan raft.ApplyMsg, 1024)
 	kv.rf = raft.Make(servers, me, persister, kv.applyCh)
 
+	kv.msgRegister = new(sync.Map)
 
+	snapshotData := readStoreFromSnapshot(persister.ReadSnapshot())
+	kv.processedMsg = snapshotData.ProcessedMsg
+	kv.store = snapshotData.Store
+	kv.persister = persister
+	kv.lastAppliedIndex = kv.rf.LastIncludedIndex()
+	kv.sm = shardmaster.MakeClerk(masters)
+
+	go kv.detectRegisterServer()
+	go kv.applyCommitLoop()
 	return kv
 }

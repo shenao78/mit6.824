@@ -293,7 +293,6 @@ func (rf *Raft) toFollower(newTerm int) {
 }
 
 func (rf *Raft) toLeader() {
-	// fmt.Printf("peer:%d become leader\n", rf.me)
 	rf.state = LeaderState
 	_, lastLogIndex := rf.lastLogTermIndex()
 	for i := range rf.nextIndexes {
@@ -302,7 +301,6 @@ func (rf *Raft) toLeader() {
 }
 
 func (rf *Raft) toCandidate() {
-	// fmt.Printf("peer:%d to candidate\n", rf.me)
 	rf.state = CandidateState
 	rf.currentTerm++
 	rf.votedFor = rf.me

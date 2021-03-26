@@ -8,11 +8,14 @@ package shardkv
 // talks to the group that holds the key's shard.
 //
 
-import "../labrpc"
-import "crypto/rand"
-import "math/big"
-import "../shardmaster"
-import "time"
+import (
+	"crypto/rand"
+	"math/big"
+	"time"
+
+	"../labrpc"
+	"../shardmaster"
+)
 
 //
 // which shard is a key in?
@@ -36,6 +39,7 @@ func nrand() int64 {
 }
 
 type Clerk struct {
+	ClientID string
 	sm       *shardmaster.Clerk
 	config   shardmaster.Config
 	make_end func(string) *labrpc.ClientEnd
@@ -53,6 +57,7 @@ type Clerk struct {
 //
 func MakeClerk(masters []*labrpc.ClientEnd, make_end func(string) *labrpc.ClientEnd) *Clerk {
 	ck := new(Clerk)
+	ck.ClientID = uuid()
 	ck.sm = shardmaster.MakeClerk(masters)
 	ck.make_end = make_end
 	// You'll have to add code here.
@@ -66,7 +71,7 @@ func MakeClerk(masters []*labrpc.ClientEnd, make_end func(string) *labrpc.Client
 // You will have to modify this function.
 //
 func (ck *Clerk) Get(key string) string {
-	args := GetArgs{}
+	args := GetArgs{ID: uuid(), ClientID: ck.ClientID}
 	args.Key = key
 
 	for {
@@ -100,11 +105,10 @@ func (ck *Clerk) Get(key string) string {
 // You will have to modify this function.
 //
 func (ck *Clerk) PutAppend(key string, value string, op string) {
-	args := PutAppendArgs{}
+	args := PutAppendArgs{ID: uuid(), ClientID: ck.ClientID}
 	args.Key = key
 	args.Value = value
 	args.Op = op
-
 
 	for {
 		shard := key2shard(key)

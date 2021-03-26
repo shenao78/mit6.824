@@ -1,5 +1,11 @@
 package shardkv
 
+import (
+	"crypto/rand"
+	"fmt"
+	"log"
+)
+
 //
 // Sharded key/value server.
 // Lots of replica groups, each running op-at-a-time paxos.
@@ -21,9 +27,11 @@ type Err string
 // Put or Append
 type PutAppendArgs struct {
 	// You'll have to add definitions here.
-	Key   string
-	Value string
-	Op    string // "Put" or "Append"
+	ID       string
+	ClientID string
+	Key      string
+	Value    string
+	Op       string // "Put" or "Append"
 	// You'll have to add definitions here.
 	// Field names must start with capital letters,
 	// otherwise RPC will break.
@@ -34,11 +42,27 @@ type PutAppendReply struct {
 }
 
 type GetArgs struct {
-	Key string
-	// You'll have to add definitions here.
+	ID       string
+	ClientID string
+	Key      string
 }
 
 type GetReply struct {
 	Err   Err
 	Value string
+}
+
+type SnapshotData struct {
+	Store        map[string]string
+	ProcessedMsg map[string]string
+}
+
+func uuid() string {
+	b := make([]byte, 16)
+	_, err := rand.Read(b)
+	if err != nil {
+		log.Fatal(err)
+	}
+	return fmt.Sprintf("%x-%x-%x-%x-%x",
+		b[0:4], b[4:6], b[6:8], b[8:10], b[10:])
 }
