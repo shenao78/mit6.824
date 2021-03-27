@@ -37,7 +37,7 @@ func (rf *Raft) InstallSnapshot(args *InstallSnapshotArgs, reply *InstallSnapsho
 
 func (rf *Raft) Snapshot(index int, snapshot []byte) {
 	rf.mu.Lock()
-	rf.mu.Unlock()
+	defer rf.mu.Unlock()
 
 	pos := rf.logPos(index)
 	tailLogs := rf.logs[pos+1:]
@@ -54,6 +54,7 @@ func (rf *Raft) Snapshot(index int, snapshot []byte) {
 func (rf *Raft) CondInstallSnapshot(lastIncludedTerm int, lastIncludedIndex int, snapshot []byte) bool {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
+
 	if !rf.isNewerLog(lastIncludedTerm, lastIncludedIndex) {
 		return false
 	}
@@ -67,13 +68,15 @@ func (rf *Raft) CondInstallSnapshot(lastIncludedTerm int, lastIncludedIndex int,
 }
 
 func (rf *Raft) installSnapshotToServer(server int) {
+	rf.mu.RLock()
 	args := &InstallSnapshotArgs{
-		Term:              rf.MyTerm(),
+		Term:              rf.currentTerm,
 		LeaderID:          rf.me,
 		LastIncludedIndex: rf.lastIncludedIndex,
 		LastIncludedTerm:  rf.lastIncludedTerm,
 		Data:              rf.persister.snapshot,
 	}
+	rf.mu.RUnlock()
 
 	result := make(chan *InstallSnapshotReply)
 	go func() {

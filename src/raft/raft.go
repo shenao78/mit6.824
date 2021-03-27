@@ -19,6 +19,7 @@ package raft
 
 import (
 	"bytes"
+	"fmt"
 	"log"
 	"sync"
 	"sync/atomic"
@@ -65,7 +66,7 @@ type Raft struct {
 	state     State
 	timeout   int32
 	applyCh   chan ApplyMsg
-
+	newLogCh  chan interface{}
 	// Your data here (2A, 2B, 2C).
 	// Look at the paper's Figure 2 for a description of what
 	// state a Raft server must maintain.
@@ -132,6 +133,7 @@ func (rf *Raft) encodeState() []byte {
 	}
 
 	if err := e.Encode(rf.logs); err != nil {
+		fmt.Println(rf.logs)
 		log.Fatal(err, "fail to persist logs")
 	}
 
@@ -192,8 +194,13 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 			Data: command,
 		})
 		rf.persist()
+
+		select {
+		case rf.newLogCh <- nil:
+		default:
+		}
 	}
-	return index, rf.currentTerm, rf.state == LeaderState
+ 	return index, rf.currentTerm, rf.state == LeaderState
 }
 
 //
@@ -241,6 +248,8 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.applyCh = applyCh
 	rf.nextIndexes = make([]int, len(rf.peers))
 	rf.matchIndexes = make([]int, len(rf.peers))
+	rf.newLogCh = make(chan interface{})
+
 	// Your initialization code here (2A, 2B, 2C).
 	rf.readPersist(persister.ReadRaftState())
 	// initialize from state persisted before a crash
@@ -251,6 +260,9 @@ func Make(peers []*labrpc.ClientEnd, me int,
 }
 
 func (rf *Raft) initApplyCommands() {
+	rf.mu.RLock()
+	defer rf.mu.RUnlock()
+
 	for i, l := range rf.logs {
 		index := i + rf.lastIncludedIndex + 1
 		if index <= rf.commitIndex {

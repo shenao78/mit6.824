@@ -36,7 +36,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	}
 
 	reply.Term = rf.currentTerm
-	if args.PrevLogIndex + 1 <= rf.lastIncludedIndex {
+	if args.PrevLogIndex+1 <= rf.lastIncludedIndex {
 		reply.Success = true
 		return
 	}
@@ -115,7 +115,11 @@ func (rf *Raft) leaderLoop() {
 				replyCnt++
 			}
 		}
-		time.Sleep(100 * time.Millisecond)
+
+		select {
+		case <-time.After(100 * time.Millisecond):
+		case <-rf.newLogCh:
+		}
 	}
 }
 
@@ -147,7 +151,9 @@ func (rf *Raft) handleAppendEntriesReply(server int, args *AppendEntriesArgs, re
 
 func (rf *Raft) commitLog(newCommitIndex, term int) {
 	for index := rf.commitIndex + 1; index <= newCommitIndex; index++ {
+		// fmt.Printf("peer:%d commit log index:%d\n", rf.me, index)
 		rf.applyCh <- ApplyMsg{CommandValid: true, Command: rf.logByIndex(index).Data, CommandIndex: index, CommandTerm: term}
+		// fmt.Printf("peer:%d finish commit log index:%d\n", rf.me, index)
 	}
 	rf.commitIndex = newCommitIndex
 }
@@ -181,7 +187,7 @@ func (rf *Raft) buildAppendEntriesArg(server, nextIndex int) *AppendEntriesArgs 
 
 	sendLogs := rf.logs[rf.logPos(nextIndex):]
 	return &AppendEntriesArgs{
-		Term:         rf.MyTerm(),
+		Term:         rf.currentTerm,
 		LeaderID:     rf.me,
 		PrevLogTerm:  prevLogTerm,
 		PrevLogIndex: prevLogIndex,
