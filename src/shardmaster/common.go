@@ -1,9 +1,7 @@
 package shardmaster
 
 import (
-	"crypto/rand"
-	"fmt"
-	"log"
+	"sync/atomic"
 )
 
 //
@@ -101,8 +99,8 @@ func (c *Config) orphanShards() []int {
 }
 
 type JoinArgs struct {
-	ID       string
-	ClientID string
+	ID       int32
+	ClientID int32
 	Servers  map[int][]string // new GID -> servers mappings
 }
 
@@ -111,8 +109,8 @@ type JoinReply struct {
 }
 
 type LeaveArgs struct {
-	ID       string
-	ClientID string
+	ID       int32
+	ClientID int32
 	GIDs     []int
 }
 
@@ -121,8 +119,8 @@ type LeaveReply struct {
 }
 
 type MoveArgs struct {
-	ID       string
-	ClientID string
+	ID       int32
+	ClientID int32
 	Shard    int
 	GID      int
 }
@@ -132,8 +130,8 @@ type MoveReply struct {
 }
 
 type QueryArgs struct {
-	ID       string
-	ClientID string
+	ID       int32
+	ClientID int32
 	Num      int // desired config number
 }
 
@@ -142,12 +140,13 @@ type QueryReply struct {
 	Config      Config
 }
 
-func uuid() string {
-	b := make([]byte, 16)
-	_, err := rand.Read(b)
-	if err != nil {
-		log.Fatal(err)
-	}
-	return fmt.Sprintf("%x-%x-%x-%x-%x",
-		b[0:4], b[4:6], b[6:8], b[8:10], b[10:])
+var clientID int32 = 1
+var reqID int32 = 1
+
+func newReqID() int32 {
+	return atomic.AddInt32(&reqID, 1)
+}
+
+func newClientID() int32 {
+	return atomic.AddInt32(&clientID, 1)
 }

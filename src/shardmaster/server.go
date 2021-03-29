@@ -5,6 +5,8 @@ import (
 	"sync"
 	"time"
 
+	"fmt"
+
 	"../labgob"
 	"../labrpc"
 	"../raft"
@@ -15,15 +17,15 @@ type ShardMaster struct {
 	me           int
 	rf           *raft.Raft
 	applyCh      chan raft.ApplyMsg
-	processedMsg map[string]string
+	processedMsg map[int32]int32
 	msgRegister  *sync.Map
 
 	configs []Config // indexed by config num
 }
 
 type Op struct {
-	ID       string
-	ClientID string
+	ID       int32
+	ClientID int32
 	OpName   string
 	Servers  map[int][]string
 	GIDs     []int
@@ -160,17 +162,19 @@ func (sm *ShardMaster) Query(args *QueryArgs, reply *QueryReply) {
 	op := Op{ID: args.ID, ClientID: args.ClientID, OpName: QUERY, Num: args.Num}
 	if !sm.startCommand(op) {
 		reply.WrongLeader = true
+		fmt.Printf("peer:%d query wrong leader\n", sm.me)
 		return
 	}
+
+	sm.mu.RLock()
+	defer sm.mu.RUnlock()
 
 	num := args.Num
 	if args.Num < 0 || args.Num > len(sm.configs) {
 		num = len(sm.configs) - 1
 	}
 
-	sm.mu.RLock()
-	defer sm.mu.RUnlock()
-
+	fmt.Printf("peer:%d query success\n", sm.me)
 	reply.Config = sm.configs[num]
 }
 
@@ -264,9 +268,9 @@ func StartServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persister)
 	sm.configs[0].Groups = map[int][]string{}
 
 	labgob.Register(Op{})
-	sm.applyCh = make(chan raft.ApplyMsg)
+	sm.applyCh = make(chan raft.ApplyMsg, 1024)
 	sm.rf = raft.Make(servers, me, persister, sm.applyCh)
-	sm.processedMsg = make(map[string]string)
+	sm.processedMsg = make(map[int32]int32)
 	sm.msgRegister = new(sync.Map)
 
 	go sm.applyCommitLoop()

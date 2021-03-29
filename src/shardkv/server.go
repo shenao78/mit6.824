@@ -6,6 +6,8 @@ import (
 	"sync"
 	"time"
 
+	"fmt"
+
 	"../labgob"
 	"../labrpc"
 	"../raft"
@@ -19,8 +21,8 @@ const (
 )
 
 type Op struct {
-	ID       string
-	ClientID string
+	ID       int32
+	ClientID int32
 	OpName   string
 	Key      string
 	Value    string
@@ -43,7 +45,7 @@ type ShardKV struct {
 	store            map[string]string
 	lastAppliedIndex int
 	msgRegister      *sync.Map
-	processedMsg     map[string]string
+	processedMsg     map[int32]int32
 }
 
 func (kv *ShardKV) Get(args *GetArgs, reply *GetReply) {
@@ -75,6 +77,7 @@ func (kv *ShardKV) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 		return
 	}
 
+	fmt.Printf("peer:%d put append\n", kv.me)
 	cmd := Op{ID: args.ID, ClientID: args.ClientID, OpName: args.Op, Key: args.Key, Value: args.Value}
 	if err := kv.startCommand(cmd); err != OK {
 		reply.Err = err
@@ -87,7 +90,7 @@ func (kv *ShardKV) isWrongGroup(key string) bool {
 	shard := key2shard(key)
 
 	kv.mu.RLock()
-	kv.mu.RUnlock()
+	defer kv.mu.RUnlock()
 	return kv.config != nil && kv.config.Shards[shard] != kv.gid
 }
 
@@ -183,7 +186,7 @@ func (kv *ShardKV) applySnapshot(msg raft.ApplyMsg) {
 func readStoreFromSnapshot(snapshot []byte) *SnapshotData {
 	snapshotData := &SnapshotData{
 		Store:        make(map[string]string),
-		ProcessedMsg: make(map[string]string),
+		ProcessedMsg: make(map[int32]int32),
 	}
 	if snapshot != nil {
 		if err := json.Unmarshal(snapshot, &snapshotData); err != nil {
@@ -204,14 +207,13 @@ func (kv *ShardKV) Kill() {
 	// Your code here, if desired.
 }
 
-func (kv *ShardKV) detectRegisterServer() {
+func (kv *ShardKV) fetchConfigLoop() {
 	for {
 		config := kv.sm.Query(-1)
 		if _, ok := config.Groups[kv.gid]; ok {
 			kv.mu.Lock()
 			kv.config = &config
 			kv.mu.Unlock()
-			return
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
@@ -274,7 +276,7 @@ func StartServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persister,
 	kv.lastAppliedIndex = kv.rf.LastIncludedIndex()
 	kv.sm = shardmaster.MakeClerk(masters)
 
-	go kv.detectRegisterServer()
+	go kv.fetchConfigLoop()
 	go kv.applyCommitLoop()
 	return kv
 }

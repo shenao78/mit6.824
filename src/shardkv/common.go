@@ -1,9 +1,7 @@
 package shardkv
 
 import (
-	"crypto/rand"
-	"fmt"
-	"log"
+	"sync/atomic"
 )
 
 //
@@ -27,8 +25,8 @@ type Err string
 // Put or Append
 type PutAppendArgs struct {
 	// You'll have to add definitions here.
-	ID       string
-	ClientID string
+	ID       int32
+	ClientID int32
 	Key      string
 	Value    string
 	Op       string // "Put" or "Append"
@@ -42,8 +40,8 @@ type PutAppendReply struct {
 }
 
 type GetArgs struct {
-	ID       string
-	ClientID string
+	ID       int32
+	ClientID int32
 	Key      string
 }
 
@@ -54,15 +52,16 @@ type GetReply struct {
 
 type SnapshotData struct {
 	Store        map[string]string
-	ProcessedMsg map[string]string
+	ProcessedMsg map[int32]int32
 }
 
-func uuid() string {
-	b := make([]byte, 16)
-	_, err := rand.Read(b)
-	if err != nil {
-		log.Fatal(err)
-	}
-	return fmt.Sprintf("%x-%x-%x-%x-%x",
-		b[0:4], b[4:6], b[6:8], b[8:10], b[10:])
+var clientID int32 = 1
+var reqID int32 = 1
+
+func newReqID() int32 {
+	return atomic.AddInt32(&reqID, 1)
+}
+
+func newClientID() int32 {
+	return atomic.AddInt32(&clientID, 1)
 }
