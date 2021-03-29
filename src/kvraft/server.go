@@ -36,6 +36,10 @@ type Op struct {
 	Value    string
 }
 
+func (o *Op) id() string {
+	return fmt.Sprintf("%d:%d", o.ClientID, o.ID)
+}
+
 type KVServer struct {
 	mu      sync.RWMutex
 	me      int
@@ -82,9 +86,9 @@ func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 
 func (kv *KVServer) startCommand(cmd Op) Err {
 	notifyCh := make(chan raft.ApplyMsg, 1)
-	kv.msgRegister.Store(cmd.ID, notifyCh)
+	kv.msgRegister.Store(cmd.id(), notifyCh)
 	defer func() {
-		kv.msgRegister.Delete(cmd.ID)
+		kv.msgRegister.Delete(cmd.id())
 	}()
 
 	_, term, leader := kv.rf.Start(cmd)
@@ -114,7 +118,6 @@ func (kv *KVServer) snapshotIfNeed() {
 			Store:        kv.store,
 			ProcessedMsg: kv.processedMsg,
 		})
-		fmt.Printf("snapshot size:%d, %v\n", len(snapshot), kv.processedMsg)
 		kv.rf.Snapshot(kv.lastAppliedIndex, snapshot)
 	}
 }
@@ -149,7 +152,7 @@ func (kv *KVServer) applyCmd(msg raft.ApplyMsg) {
 
 	kv.snapshotIfNeed()
 
-	if val, ok := kv.msgRegister.Load(cmd.ID); ok {
+	if val, ok := kv.msgRegister.Load(cmd.id()); ok {
 		notifyCh := val.(chan raft.ApplyMsg)
 		select {
 		case notifyCh <- msg:

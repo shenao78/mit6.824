@@ -6,7 +6,6 @@ package shardmaster
 
 import (
 	"crypto/rand"
-	"fmt"
 	"math/big"
 	"time"
 
@@ -45,12 +44,10 @@ func (ck *Clerk) Query(num int) Config {
 		// try each known server.
 		for _, srv := range ck.servers {
 			var reply QueryReply
-			fmt.Printf("shard master client start query\n")
 			ok := srv.Call("ShardMaster.Query", args, &reply)
 			if ok && reply.WrongLeader == false {
 				return reply.Config
 			}
-			fmt.Printf("query is not ok:%v, wrong leader:%v\n", ok, reply.WrongLeader)
 		}
 		time.Sleep(100 * time.Millisecond)
 	}

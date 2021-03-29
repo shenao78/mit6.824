@@ -34,6 +34,10 @@ type Op struct {
 	Num      int
 }
 
+func (o *Op) id() string {
+	return fmt.Sprintf("%d:%d", o.ClientID, o.ID)
+}
+
 type JoinReq struct {
 	Servers map[int][]string
 }
@@ -162,7 +166,6 @@ func (sm *ShardMaster) Query(args *QueryArgs, reply *QueryReply) {
 	op := Op{ID: args.ID, ClientID: args.ClientID, OpName: QUERY, Num: args.Num}
 	if !sm.startCommand(op) {
 		reply.WrongLeader = true
-		fmt.Printf("peer:%d query wrong leader\n", sm.me)
 		return
 	}
 
@@ -174,15 +177,14 @@ func (sm *ShardMaster) Query(args *QueryArgs, reply *QueryReply) {
 		num = len(sm.configs) - 1
 	}
 
-	fmt.Printf("peer:%d query success\n", sm.me)
 	reply.Config = sm.configs[num]
 }
 
 func (sm *ShardMaster) startCommand(cmd Op) bool {
 	notifyCh := make(chan raft.ApplyMsg, 1)
-	sm.msgRegister.Store(cmd.ID, notifyCh)
+	sm.msgRegister.Store(cmd.id(), notifyCh)
 	defer func() {
-		sm.msgRegister.Delete(cmd.ID)
+		sm.msgRegister.Delete(cmd.id())
 	}()
 
 	_, term, leader := sm.rf.Start(cmd)
@@ -221,15 +223,17 @@ func (sm *ShardMaster) applyCmd(msg raft.ApplyMsg) {
 		switch op.OpName {
 		case JOIN:
 			sm.handleJoin(op)
+			fmt.Printf("join servers:%v, config:%v\n", op.Servers, sm.latestConfig())
 		case LEAVE:
 			sm.handleLeave(op)
+			fmt.Printf("leave servers:%v, config:%v\n", op.Servers, sm.latestConfig())
 		case MOVE:
 			sm.handleMove(op)
 		}
 		sm.processedMsg[op.ClientID] = op.ID
 	}
 
-	if val, ok := sm.msgRegister.Load(op.ID); ok {
+	if val, ok := sm.msgRegister.Load(op.id()); ok {
 		notifyCh := val.(chan raft.ApplyMsg)
 		select {
 		case notifyCh <- msg:

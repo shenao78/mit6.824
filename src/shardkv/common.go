@@ -2,6 +2,8 @@ package shardkv
 
 import (
 	"sync/atomic"
+
+	"../shardmaster"
 )
 
 //
@@ -25,11 +27,12 @@ type Err string
 // Put or Append
 type PutAppendArgs struct {
 	// You'll have to add definitions here.
-	ID       int32
-	ClientID int32
-	Key      string
-	Value    string
-	Op       string // "Put" or "Append"
+	ID        int32
+	ClientID  int32
+	ConfigNum int
+	Key       string
+	Value     string
+	Op        string // "Put" or "Append"
 	// You'll have to add definitions here.
 	// Field names must start with capital letters,
 	// otherwise RPC will break.
@@ -40,9 +43,10 @@ type PutAppendReply struct {
 }
 
 type GetArgs struct {
-	ID       int32
-	ClientID int32
-	Key      string
+	ID        int32
+	ClientID  int32
+	ConfigNum int
+	Key       string
 }
 
 type GetReply struct {
@@ -51,8 +55,11 @@ type GetReply struct {
 }
 
 type SnapshotData struct {
-	Store        map[string]string
-	ProcessedMsg map[int32]int32
+	Store          map[string]string
+	ProcessedMsg   map[int32]int32
+	Config         *shardmaster.Config
+	ClientID       int32
+	KnownConfigNum int
 }
 
 var clientID int32 = 1
