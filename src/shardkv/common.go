@@ -20,6 +20,7 @@ const (
 	ErrNoKey       = "ErrNoKey"
 	ErrWrongGroup  = "ErrWrongGroup"
 	ErrWrongLeader = "ErrWrongLeader"
+	ErrNotTakeOver = "ErrNotTakeOver"
 )
 
 type Err string
@@ -56,10 +57,9 @@ type GetReply struct {
 
 type SnapshotData struct {
 	Store          map[string]string
-	ProcessedMsg   map[int32]int32
+	ProcessedMsg   map[int32]UniMsg
 	Config         *shardmaster.Config
 	ClientID       int32
-	KnownConfigNum int
 }
 
 var clientID int32 = 1

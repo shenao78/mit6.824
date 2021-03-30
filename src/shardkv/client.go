@@ -13,6 +13,8 @@ import (
 	"math/big"
 	"time"
 
+	"fmt"
+
 	"../labrpc"
 	"../shardmaster"
 )
@@ -121,11 +123,14 @@ func (ck *Clerk) PutAppend(key string, value string, op string) {
 				var reply PutAppendReply
 				ok := srv.Call("ShardKV.PutAppend", &args, &reply)
 				if ok && reply.Err == OK {
+					fmt.Printf("(%d:%d) send to server:%s success\n", args.ClientID, args.ID, servers[si])
 					return
 				}
 				if ok && reply.Err == ErrWrongGroup {
+					fmt.Printf("(%d:%d) send to server:%s wrong group\n", args.ClientID, args.ID, servers[si])
 					break
 				}
+				fmt.Printf("(%d:%d) send to server:%s wrong leader\n", args.ClientID, args.ID, servers[si])
 				// ... not ok, or ErrWrongLeader
 			}
 		}

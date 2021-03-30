@@ -21,17 +21,23 @@ const (
 )
 
 type Op struct {
-	ID       int32
-	ClientID int32
-	OpName   string
-	Key      string
-	Value    string
-	Config   *shardmaster.Config
-	State    map[string]string
+	ID           int32
+	ClientID     int32
+	OpName       string
+	Key          string
+	Value        string
+	Config       *shardmaster.Config
+	State        map[string]string
+	ProcessedMsg map[int32]UniMsg
 }
 
 func (o *Op) id() string {
 	return fmt.Sprintf("%d:%d", o.ClientID, o.ID)
+}
+
+type UniMsg struct {
+	ID    int32
+	Shard int
 }
 
 type ShardKV struct {
@@ -51,7 +57,7 @@ type ShardKV struct {
 	store            map[string]string
 	lastAppliedIndex int
 	msgRegister      *sync.Map
-	processedMsg     map[int32]int32
+	processedMsg     map[int32]UniMsg
 	clientID         int32
 	knownConfigNum   int
 }
@@ -129,6 +135,7 @@ func (kv *ShardKV) startCommand(cmd Op) Err {
 			}
 		case <-time.After(20 * time.Millisecond):
 			if kv.rf.MyTerm() > term {
+				fmt.Printf("gid:%d server%d lose leader\n", kv.gid, kv.me)
 				return ErrWrongLeader
 			}
 		}
@@ -138,11 +145,10 @@ func (kv *ShardKV) startCommand(cmd Op) Err {
 func (kv *ShardKV) snapshotIfNeed() {
 	if kv.maxraftstate != -1 && kv.persister.RaftStateSize() > kv.maxraftstate {
 		snapshot, _ := json.Marshal(&SnapshotData{
-			Store:          kv.store,
-			ProcessedMsg:   kv.processedMsg,
-			ClientID:       kv.clientID,
-			KnownConfigNum: kv.knownConfigNum,
-			Config:         kv.config,
+			Store:        kv.store,
+			ProcessedMsg: kv.processedMsg,
+			ClientID:     kv.clientID,
+			Config:       kv.config,
 		})
 		kv.rf.Snapshot(kv.lastAppliedIndex, snapshot)
 	}
@@ -166,22 +172,18 @@ func (kv *ShardKV) applyCmd(msg raft.ApplyMsg) {
 	kv.lastAppliedIndex = msg.CommandIndex
 
 	cmd := msg.Command.(Op)
-	if kv.processedMsg[cmd.ClientID] != cmd.ID {
+	if kv.processedMsg[cmd.ClientID].ID != cmd.ID {
 		switch cmd.OpName {
 		case Put:
 			kv.store[cmd.Key] = cmd.Value
-			fmt.Printf("gid:%d peer:%d put key:%s(shard:%d), val:%s store:%v\n", kv.gid, kv.me, cmd.Key, key2shard(cmd.Key), cmd.Value, kv.store)
+			fmt.Printf("gid:%d peer:%d (id:%s) put key:%s(shard:%d), val:%s store:%v\n", kv.gid, kv.me, cmd.id(), cmd.Key, key2shard(cmd.Key), cmd.Value, kv.store)
 		case Append:
 			kv.store[cmd.Key] += cmd.Value
-			fmt.Printf("gid:%d peer:%d append key:%s(shard:%d), val:%s store:%v\n", kv.gid, kv.me, cmd.Key, key2shard(cmd.Key), cmd.Value, kv.store)
+			fmt.Printf("gid:%d peer:%d (id:%s) append key:%s(shard:%d), val:%s store:%v\n", kv.gid, kv.me, cmd.id(), cmd.Key, key2shard(cmd.Key), cmd.Value, kv.store)
 		case ReConfigurations:
-			for key, val := range cmd.State {
-				kv.store[key] = val
-			}
-			kv.config = cmd.Config
-			fmt.Printf("gid:%d peer:%d change to config:%v\n", kv.gid, kv.me, kv.config)
+			kv.applyReConfigurations(cmd)
 		}
-		kv.processedMsg[cmd.ClientID] = cmd.ID
+		kv.processedMsg[cmd.ClientID] = UniMsg{ID: cmd.ID, Shard: key2shard(cmd.Key)}
 	}
 
 	kv.snapshotIfNeed()
@@ -195,6 +197,17 @@ func (kv *ShardKV) applyCmd(msg raft.ApplyMsg) {
 	}
 }
 
+func (kv *ShardKV) applyReConfigurations(cmd Op) {
+	for key, val := range cmd.State {
+		kv.store[key] = val
+	}
+	for clientID, msg := range cmd.ProcessedMsg {
+		kv.processedMsg[clientID] = msg
+	}
+	kv.config = cmd.Config
+	fmt.Printf("gid:%d peer:%d change to config:%v\n", kv.gid, kv.me, kv.config)
+}
+
 func (kv *ShardKV) applySnapshot(msg raft.ApplyMsg) {
 	snapshot := msg.Command.([]byte)
 	if ok := kv.rf.CondInstallSnapshot(msg.CommandTerm, msg.CommandIndex, snapshot); ok {
@@ -203,7 +216,6 @@ func (kv *ShardKV) applySnapshot(msg raft.ApplyMsg) {
 		kv.store = snapshotData.Store
 		kv.processedMsg = snapshotData.ProcessedMsg
 		kv.config = snapshotData.Config
-		kv.knownConfigNum = snapshotData.KnownConfigNum
 		kv.lastAppliedIndex = msg.CommandIndex
 		kv.mu.Unlock()
 	}
@@ -212,7 +224,7 @@ func (kv *ShardKV) applySnapshot(msg raft.ApplyMsg) {
 func readStoreFromSnapshot(snapshot []byte) *SnapshotData {
 	snapshotData := &SnapshotData{
 		Store:        make(map[string]string),
-		ProcessedMsg: make(map[int32]int32),
+		ProcessedMsg: make(map[int32]UniMsg),
 	}
 	if snapshot != nil {
 		if err := json.Unmarshal(snapshot, &snapshotData); err != nil {
@@ -288,7 +300,6 @@ func StartServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persister,
 	kv.store = snapshotData.Store
 	kv.config = snapshotData.Config
 	kv.clientID = snapshotData.ClientID
-	kv.knownConfigNum = snapshotData.KnownConfigNum
 
 	kv.persister = persister
 	kv.lastAppliedIndex = kv.rf.LastIncludedIndex()
