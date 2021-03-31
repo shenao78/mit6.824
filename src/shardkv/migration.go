@@ -1,7 +1,6 @@
 package shardkv
 
 import (
-	"fmt"
 	"time"
 
 	"../shardmaster"
@@ -50,7 +49,7 @@ func (kv *ShardKV) migrationConfig(config, nextConfig shardmaster.Config) Err {
 
 	newState := make(map[string]string)
 	processedMsg := make(map[int32]UniMsg)
-	fmt.Printf("gid:%d peer:%d reConfigurations new shard %v to config %d\n", kv.gid, kv.me, newShards, nextConfig.Num)
+	// fmt.Printf("gid:%d peer:%d reConfigurations new shard %v to config %d\n", kv.gid, kv.me, newShards, nextConfig.Num)
 	if len(newShards) != 0 {
 		prevConfigNum := nextConfig.Num - 1
 		// fmt.Printf("gid:%d peer:%d prev config num:%d\n", kv.gid, kv.me, prevConfigNum)
@@ -140,7 +139,7 @@ func (kv *ShardKV) GetState(args *GetStateArgs, reply *GetStateReply) {
 			processedMsg[clientID] = msg
 		}
 	}
-	fmt.Printf("gid %d peer:%d send shards:%v\n", kv.gid, kv.me, args.Shards)
+	// fmt.Printf("gid %d peer:%d send shards:%v\n", kv.gid, kv.me, args.Shards)
 	reply.Err = OK
 	reply.State = state
 	reply.ProcessedMsg = processedMsg
@@ -160,7 +159,7 @@ func (kv *ShardKV) requestState(shards []int, servers []string, nextConfigNum in
 			reply := &GetStateReply{}
 			ok := client.Call("ShardKV.GetState", args, reply)
 			if ok && reply.Err == OK {
-				fmt.Printf("gid:%d peer:%d request shards %v from server:%s\n", kv.gid, kv.me, shards, server)
+				// fmt.Printf("gid:%d peer:%d request shards %v from server:%s\n", kv.gid, kv.me, shards, server)
 				return reply
 			}
 		}

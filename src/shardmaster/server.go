@@ -5,8 +5,6 @@ import (
 	"sync"
 	"time"
 
-	"fmt"
-
 	"../labgob"
 	"../labrpc"
 	"../raft"
@@ -32,10 +30,6 @@ type Op struct {
 	Shard    int
 	GID      int
 	Num      int
-}
-
-func (o *Op) id() string {
-	return fmt.Sprintf("%d:%d", o.ClientID, o.ID)
 }
 
 type JoinReq struct {
@@ -182,9 +176,9 @@ func (sm *ShardMaster) Query(args *QueryArgs, reply *QueryReply) {
 
 func (sm *ShardMaster) startCommand(cmd Op) bool {
 	notifyCh := make(chan raft.ApplyMsg, 1)
-	sm.msgRegister.Store(cmd.id(), notifyCh)
+	sm.msgRegister.Store(cmd.ID, notifyCh)
 	defer func() {
-		sm.msgRegister.Delete(cmd.id())
+		sm.msgRegister.Delete(cmd.ID)
 	}()
 
 	_, term, leader := sm.rf.Start(cmd)
@@ -223,17 +217,17 @@ func (sm *ShardMaster) applyCmd(msg raft.ApplyMsg) {
 		switch op.OpName {
 		case JOIN:
 			sm.handleJoin(op)
-			fmt.Printf("join servers:%v, config:%v\n", op.Servers, sm.latestConfig())
+			// fmt.Printf("join servers:%v, config:%v\n", op.Servers, sm.latestConfig())
 		case LEAVE:
 			sm.handleLeave(op)
-			fmt.Printf("leave servers:%v, config:%v\n", op.Servers, sm.latestConfig())
+			// fmt.Printf("leave servers:%v, config:%v\n", op.Servers, sm.latestConfig())
 		case MOVE:
 			sm.handleMove(op)
 		}
 		sm.processedMsg[op.ClientID] = op.ID
 	}
 
-	if val, ok := sm.msgRegister.Load(op.id()); ok {
+	if val, ok := sm.msgRegister.Load(op.ID); ok {
 		notifyCh := val.(chan raft.ApplyMsg)
 		select {
 		case notifyCh <- msg:
