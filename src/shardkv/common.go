@@ -58,7 +58,7 @@ type GetReply struct {
 type SnapshotData struct {
 	Store          map[string]string
 	ProcessedMsg   map[int32]UniMsg
-	Config         *shardmaster.Config
+	Config         shardmaster.Config
 	ClientID       int32
 }
 

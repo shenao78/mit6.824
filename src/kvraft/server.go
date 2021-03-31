@@ -2,7 +2,6 @@ package kvraft
 
 import (
 	"encoding/json"
-	"fmt"
 	"log"
 	"sync"
 	"sync/atomic"
@@ -34,10 +33,6 @@ type Op struct {
 	OpName   string
 	Key      string
 	Value    string
-}
-
-func (o *Op) id() string {
-	return fmt.Sprintf("%d:%d", o.ClientID, o.ID)
 }
 
 type KVServer struct {
@@ -86,9 +81,9 @@ func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 
 func (kv *KVServer) startCommand(cmd Op) Err {
 	notifyCh := make(chan raft.ApplyMsg, 1)
-	kv.msgRegister.Store(cmd.id(), notifyCh)
+	kv.msgRegister.Store(cmd.ID, notifyCh)
 	defer func() {
-		kv.msgRegister.Delete(cmd.id())
+		kv.msgRegister.Delete(cmd.ID)
 	}()
 
 	_, term, leader := kv.rf.Start(cmd)
@@ -152,7 +147,7 @@ func (kv *KVServer) applyCmd(msg raft.ApplyMsg) {
 
 	kv.snapshotIfNeed()
 
-	if val, ok := kv.msgRegister.Load(cmd.id()); ok {
+	if val, ok := kv.msgRegister.Load(cmd.ID); ok {
 		notifyCh := val.(chan raft.ApplyMsg)
 		select {
 		case notifyCh <- msg:

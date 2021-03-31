@@ -24,15 +24,12 @@ type Op struct {
 	ID           int32
 	ClientID     int32
 	OpName       string
+	configNum    int
 	Key          string
 	Value        string
-	Config       *shardmaster.Config
+	Config       shardmaster.Config
 	State        map[string]string
 	ProcessedMsg map[int32]UniMsg
-}
-
-func (o *Op) id() string {
-	return fmt.Sprintf("%d:%d", o.ClientID, o.ID)
 }
 
 type UniMsg struct {
@@ -53,7 +50,7 @@ type ShardKV struct {
 	sm           *shardmaster.Clerk
 
 	// Your definitions here.
-	config           *shardmaster.Config
+	config           shardmaster.Config
 	store            map[string]string
 	lastAppliedIndex int
 	msgRegister      *sync.Map
@@ -63,12 +60,13 @@ type ShardKV struct {
 }
 
 func (kv *ShardKV) Get(args *GetArgs, reply *GetReply) {
-	if kv.isWrongGroup(args.Key, args.ConfigNum) {
+	wrongGroup, configNum := kv.isWrongGroup(args.Key, args.ConfigNum)
+	if wrongGroup {
 		reply.Err = ErrWrongGroup
 		return
 	}
 
-	cmd := Op{ID: args.ID, ClientID: args.ClientID, OpName: Get, Key: args.Key}
+	cmd := Op{ID: args.ID, ClientID: args.ClientID, OpName: Get, configNum: configNum, Key: args.Key}
 	if err := kv.startCommand(cmd); err != OK {
 		reply.Err = err
 		return
@@ -87,12 +85,13 @@ func (kv *ShardKV) Get(args *GetArgs, reply *GetReply) {
 }
 
 func (kv *ShardKV) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
-	if kv.isWrongGroup(args.Key, args.ConfigNum) {
+	wrongGroup, configNum := kv.isWrongGroup(args.Key, args.ConfigNum)
+	if wrongGroup {
 		reply.Err = ErrWrongGroup
 		return
 	}
 
-	cmd := Op{ID: args.ID, ClientID: args.ClientID, OpName: args.Op, Key: args.Key, Value: args.Value}
+	cmd := Op{ID: args.ID, ClientID: args.ClientID, OpName: args.Op, configNum: configNum, Key: args.Key, Value: args.Value}
 	if err := kv.startCommand(cmd); err != OK {
 		reply.Err = err
 		return
@@ -100,24 +99,30 @@ func (kv *ShardKV) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 	reply.Err = OK
 }
 
-func (kv *ShardKV) isWrongGroup(key string, configNum int) bool {
+func (kv *ShardKV) isWrongGroup(key string, clientConfigNum int) (bool, int) {
 	shard := key2shard(key)
 
 	kv.mu.Lock()
 	defer kv.mu.Unlock()
 
-	if configNum > kv.knownConfigNum {
-		kv.knownConfigNum = configNum
+	if clientConfigNum > kv.knownConfigNum {
+		kv.knownConfigNum = clientConfigNum
 	}
 
-	return kv.config == nil || kv.knownConfigNum > kv.config.Num || kv.config.Shards[shard] != kv.gid
+	wrongGroup := kv.knownConfigNum > kv.config.Num || kv.config.Shards[shard] != kv.gid
+	return wrongGroup, kv.config.Num
+}
+
+type cmdResult struct {
+	err      Err
+	applyMsg raft.ApplyMsg
 }
 
 func (kv *ShardKV) startCommand(cmd Op) Err {
-	notifyCh := make(chan raft.ApplyMsg, 1)
-	kv.msgRegister.Store(cmd.id(), notifyCh)
+	notifyCh := make(chan *cmdResult, 1)
+	kv.msgRegister.Store(cmd.ID, notifyCh)
 	defer func() {
-		kv.msgRegister.Delete(cmd.id())
+		kv.msgRegister.Delete(cmd.ID)
 	}()
 
 	_, term, leader := kv.rf.Start(cmd)
@@ -127,8 +132,11 @@ func (kv *ShardKV) startCommand(cmd Op) Err {
 
 	for {
 		select {
-		case msg := <-notifyCh:
-			if msg.CommandTerm > term {
+		case result := <-notifyCh:
+			if result.err != OK {
+				return result.err
+			}
+			if result.applyMsg.CommandTerm > term {
 				return ErrWrongLeader
 			} else {
 				return OK
@@ -171,15 +179,22 @@ func (kv *ShardKV) applyCmd(msg raft.ApplyMsg) {
 
 	kv.lastAppliedIndex = msg.CommandIndex
 
+	var err Err = OK
 	cmd := msg.Command.(Op)
 	if kv.processedMsg[cmd.ClientID].ID != cmd.ID {
 		switch cmd.OpName {
 		case Put:
+			if kv.config.Num < kv.knownConfigNum || kv.config.Num != cmd.configNum {
+				err = ErrWrongGroup
+			}
 			kv.store[cmd.Key] = cmd.Value
-			fmt.Printf("gid:%d peer:%d (id:%s) put key:%s(shard:%d), val:%s store:%v\n", kv.gid, kv.me, cmd.id(), cmd.Key, key2shard(cmd.Key), cmd.Value, kv.store)
+			fmt.Printf("gid:%d peer:%d (id:%d) err:%s put key:%s(shard:%d), val:%s store:%v\n", kv.gid, kv.me, cmd.ID, err, cmd.Key, key2shard(cmd.Key), cmd.Value, kv.store)
 		case Append:
+			if kv.config.Num < kv.knownConfigNum || kv.config.Num != cmd.configNum {
+				err = ErrWrongGroup
+			}
 			kv.store[cmd.Key] += cmd.Value
-			fmt.Printf("gid:%d peer:%d (id:%s) append key:%s(shard:%d), val:%s store:%v\n", kv.gid, kv.me, cmd.id(), cmd.Key, key2shard(cmd.Key), cmd.Value, kv.store)
+			fmt.Printf("gid:%d peer:%d (id:%d) err:%s append key:%s(shard:%d), val:%s store:%v\n", kv.gid, kv.me, cmd.ID, err, cmd.Key, key2shard(cmd.Key), cmd.Value, kv.store)
 		case ReConfigurations:
 			kv.applyReConfigurations(cmd)
 		}
@@ -188,10 +203,13 @@ func (kv *ShardKV) applyCmd(msg raft.ApplyMsg) {
 
 	kv.snapshotIfNeed()
 
-	if val, ok := kv.msgRegister.Load(cmd.id()); ok {
-		notifyCh := val.(chan raft.ApplyMsg)
+	if val, ok := kv.msgRegister.Load(cmd.ID); ok {
+		notifyCh := val.(chan *cmdResult)
 		select {
-		case notifyCh <- msg:
+		case notifyCh <- &cmdResult{err: err, applyMsg: msg}:
+			if err != OK {
+				fmt.Printf("notify msg:%s err\n", cmd.Value)
+			}
 		default:
 		}
 	}
@@ -232,6 +250,13 @@ func readStoreFromSnapshot(snapshot []byte) *SnapshotData {
 		}
 	}
 	return snapshotData
+}
+
+func (kv *ShardKV) myConfig() shardmaster.Config {
+	kv.mu.RLock()
+	defer kv.mu.RUnlock()
+
+	return kv.config
 }
 
 //

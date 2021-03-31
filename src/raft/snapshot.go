@@ -18,7 +18,7 @@ type InstallSnapshotReply struct {
 
 func (rf *Raft) InstallSnapshot(args *InstallSnapshotArgs, reply *InstallSnapshotReply) {
 	rf.mu.RLock()
-	rf.mu.RUnlock()
+	defer rf.mu.RUnlock()
 
 	reply.Term = rf.currentTerm
 	if args.Term < rf.currentTerm {

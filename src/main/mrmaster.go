@@ -1,7 +1,11 @@
 package main
 
 import (
-	"../raft"
+	"fmt"
+	"os"
+	"time"
+
+	"../mr"
 )
 
 //
@@ -14,20 +18,15 @@ import (
 //
 
 func main() {
-	// if len(os.Args) < 2 {
-	// 	fmt.Fprintf(os.Stderr, "Usage: mrmaster inputfiles...\n")
-	// 	os.Exit(1)
-	// }
-	//
-	// m := mr.MakeMaster(os.Args[1:], 10)
-	// for m.Done() == false {
-	// 	time.Sleep(time.Second)
-	// }
-	//
-	// time.Sleep(time.Second)
-
-	raft.Make(nil, 0, nil, nil)
-	select {
-
+	if len(os.Args) < 2 {
+		fmt.Fprintf(os.Stderr, "Usage: mrmaster inputfiles...\n")
+		os.Exit(1)
 	}
+
+	m := mr.MakeMaster(os.Args[1:], 10)
+	for m.Done() == false {
+		time.Sleep(time.Second)
+	}
+
+	time.Sleep(time.Second)
 }

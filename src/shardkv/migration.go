@@ -17,34 +17,27 @@ func (kv *ShardKV) fetchConfigLoop() {
 }
 
 func (kv *ShardKV) reConfigurations() {
-	configNum := 0
-	if kv.config != nil {
-		configNum = kv.config.Num
-	}
-
 	latestConfig := kv.sm.Query(-1)
-	config := kv.config
+	config := kv.myConfig()
 	// fmt.Printf("gid:%d peer:%d config num:%d latest config num%d\n", kv.gid, kv.me, configNum, latestConfig.Num)
-	for nextConfigNum := configNum + 1; nextConfigNum <= latestConfig.Num; nextConfigNum++ {
+	for nextConfigNum := config.Num + 1; nextConfigNum <= latestConfig.Num; nextConfigNum++ {
 		nextConfig := latestConfig
 		if nextConfigNum != latestConfig.Num {
 			nextConfig = kv.sm.Query(nextConfigNum)
 		}
 
-		if kv.migrationConfig(config, &nextConfig) != OK {
+		if kv.migrationConfig(config, nextConfig) != OK {
 			break
 		}
-		config = &nextConfig
+		config = nextConfig
 	}
 }
 
-func (kv *ShardKV) migrationConfig(config, nextConfig *shardmaster.Config) Err {
+func (kv *ShardKV) migrationConfig(config, nextConfig shardmaster.Config) Err {
 	oldShards := make(map[int]bool)
-	if config != nil {
-		for shard, gid := range config.Shards {
-			if gid == kv.gid {
-				oldShards[shard] = true
-			}
+	for shard, gid := range config.Shards {
+		if gid == kv.gid {
+			oldShards[shard] = true
 		}
 	}
 
@@ -67,7 +60,7 @@ func (kv *ShardKV) migrationConfig(config, nextConfig *shardmaster.Config) Err {
 			// fmt.Printf("gid:%d peer:%d get prev config:%v\n", kv.gid, kv.me, prevConfig)
 			for gid, shards := range gidToShards {
 				servers := prevConfig.Groups[gid]
-				reply := kv.requestState(shards, servers)
+				reply := kv.requestState(shards, servers, nextConfig.Num)
 				for key, val := range reply.State {
 					newState[key] = val
 				}
@@ -147,13 +140,13 @@ func (kv *ShardKV) GetState(args *GetStateArgs, reply *GetStateReply) {
 			processedMsg[clientID] = msg
 		}
 	}
-	// fmt.Printf("gid %d peer:%d send state to (gid:%d peer:%d):%v\n", kv.gid, kv.me, args.GID, result)
+	fmt.Printf("gid %d peer:%d send shards:%v\n", kv.gid, kv.me, args.Shards)
 	reply.Err = OK
 	reply.State = state
 	reply.ProcessedMsg = processedMsg
 }
 
-func (kv *ShardKV) requestState(shards []int, servers []string) *GetStateReply {
+func (kv *ShardKV) requestState(shards []int, servers []string, nextConfigNum int) *GetStateReply {
 	for {
 		for _, server := range servers {
 			client := kv.make_end(server)
@@ -161,13 +154,13 @@ func (kv *ShardKV) requestState(shards []int, servers []string) *GetStateReply {
 				ID:            newReqID(),
 				ClientID:      kv.clientID,
 				Shards:        shards,
-				NextConfigNum: kv.config.Num + 1,
+				NextConfigNum: nextConfigNum,
 			}
 
 			reply := &GetStateReply{}
 			ok := client.Call("ShardKV.GetState", args, reply)
 			if ok && reply.Err == OK {
-				fmt.Printf("gid:%d peer:%d request shards %v from server:%s, state:%v\n", kv.gid, kv.me, shards, server, reply.State)
+				fmt.Printf("gid:%d peer:%d request shards %v from server:%s\n", kv.gid, kv.me, shards, server)
 				return reply
 			}
 		}
