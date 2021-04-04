@@ -37,6 +37,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 
 	reply.Term = rf.currentTerm
 	if args.PrevLogIndex+1 <= rf.lastIncludedIndex {
+		rf.appendLogsAfterSnapshot(args)
 		reply.Success = true
 		return
 	}
@@ -49,10 +50,13 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	} else if prevIndex == 0 || rf.termOfIndex(prevIndex) == args.PrevLogTerm {
 		reply.Success = true
 		prevPos := rf.logPos(args.PrevLogIndex)
-		rf.logs = append(rf.logs[:prevPos+1], args.Logs...)
+		newLogs := append(rf.logs[:prevPos+1], args.Logs...)
+		if len(rf.logs) > len(newLogs) {
+			newLogs = append(newLogs, rf.logs[len(newLogs):]...)
+		}
+		rf.logs = newLogs
 		if args.LeaderCommit > rf.commitIndex {
-			newCommitIndex := Mini(args.LeaderCommit, lastIndex)
-			rf.commitLog(newCommitIndex, rf.currentTerm)
+			rf.commitLog(args.LeaderCommit)
 		}
 	} else {
 		reply.Success = false
@@ -64,11 +68,26 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		}
 		reply.NextIndex = index
 		nextPos := rf.logPos(index)
+		if nextPos < 0 {
+			nextPos = 0
+		}
 		rf.logs = rf.logs[:nextPos]
-		reply.Success = false
-
 	}
 	rf.persist()
+}
+
+func (rf *Raft) appendLogsAfterSnapshot(args *AppendEntriesArgs) {
+	var newLogs []*Log
+	for i := range args.Logs {
+		index := args.PrevLogIndex + i + 1
+		if index > rf.lastIncludedIndex {
+			newLogs = append(newLogs, args.Logs[i])
+		}
+	}
+	if len(rf.logs) > len(newLogs) {
+		newLogs = append(newLogs, rf.logs[len(newLogs):]...)
+	}
+	rf.logs = newLogs
 }
 
 type appendReplyWithServer struct {
@@ -124,6 +143,9 @@ func (rf *Raft) leaderLoop() {
 }
 
 func (rf *Raft) handleAppendEntriesReply(server int, args *AppendEntriesArgs, reply *AppendEntriesReply) {
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+
 	if reply.Success {
 		rf.nextIndexes[server] = args.PrevLogIndex + len(args.Logs) + 1
 		rf.matchIndexes[server] = rf.nextIndexes[server] - 1
@@ -131,34 +153,37 @@ func (rf *Raft) handleAppendEntriesReply(server int, args *AppendEntriesArgs, re
 		rf.nextIndexes[server] = reply.NextIndex
 	}
 
-	rf.mu.RLock()
-	defer rf.mu.RUnlock()
-
 	_, lastIndex := rf.lastLogTermIndex()
 	for n := rf.commitIndex + 1; n <= lastIndex; n++ {
 		cnt := 1
+		var servers []int
 		for server, matchIndex := range rf.matchIndexes {
 			if matchIndex >= n && server != rf.me {
+				servers = append(servers, server)
 				cnt++
 			}
 		}
 		curTerm := rf.currentTerm
 		if n > rf.commitIndex && cnt > len(rf.peers)/2 && rf.logByIndex(n).Term == curTerm {
-			rf.commitLog(n, curTerm)
+			rf.commitLog(n)
 		}
 	}
 }
 
-func (rf *Raft) commitLog(newCommitIndex, term int) {
+func (rf *Raft) commitLog(commitIndex int) {
+	_, lastIndex := rf.lastLogTermIndex()
+	newCommitIndex := Mini(commitIndex, lastIndex)
 	for index := rf.commitIndex + 1; index <= newCommitIndex; index++ {
-		// fmt.Printf("peer:%d commit log index:%d\n", rf.me, index)
-		rf.applyCh <- ApplyMsg{CommandValid: true, Command: rf.logByIndex(index).Data, CommandIndex: index, CommandTerm: term}
-		// fmt.Printf("peer:%d finish commit log index:%d\n", rf.me, index)
+		log := rf.logByIndex(index)
+		rf.applyCh <- ApplyMsg{CommandValid: true, Command: log.Data, CommandIndex: index, CommandTerm: log.Term}
 	}
 	rf.commitIndex = newCommitIndex
 }
 
 func (rf *Raft) buildAppendEntriesArgs() []*AppendEntriesArgs {
+	rf.mu.RLock()
+	defer rf.mu.RUnlock()
+
 	result := make([]*AppendEntriesArgs, len(rf.peers))
 	for server, nextIndex := range rf.nextIndexes {
 		if server == rf.me {
@@ -171,9 +196,6 @@ func (rf *Raft) buildAppendEntriesArgs() []*AppendEntriesArgs {
 }
 
 func (rf *Raft) buildAppendEntriesArg(server, nextIndex int) *AppendEntriesArgs {
-	rf.mu.RLock()
-	defer rf.mu.RUnlock()
-
 	beginPos := rf.logPos(nextIndex)
 	if beginPos < 0 {
 		go rf.installSnapshotToServer(server)
@@ -181,11 +203,15 @@ func (rf *Raft) buildAppendEntriesArg(server, nextIndex int) *AppendEntriesArgs 
 	}
 
 	prevLogTerm, prevLogIndex := rf.lastIncludedTerm, nextIndex-1
-	if prevLogIndex != 0 && beginPos > 0 {
+	if prevLogIndex != 0 && beginPos > 0 && beginPos <= len(rf.logs) {
 		prevLogTerm = rf.logByIndex(prevLogIndex).Term
 	}
 
-	sendLogs := rf.logs[rf.logPos(nextIndex):]
+	var sendLogs []*Log
+	if beginPos < len(rf.logs) {
+		sendLogs = rf.logs[rf.logPos(nextIndex):]
+	}
+
 	return &AppendEntriesArgs{
 		Term:         rf.currentTerm,
 		LeaderID:     rf.me,

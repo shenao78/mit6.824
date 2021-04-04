@@ -17,22 +17,17 @@ type InstallSnapshotReply struct {
 }
 
 func (rf *Raft) InstallSnapshot(args *InstallSnapshotArgs, reply *InstallSnapshotReply) {
-	rf.mu.RLock()
-	defer rf.mu.RUnlock()
-
-	reply.Term = rf.currentTerm
-	if args.Term < rf.currentTerm {
+	reply.Term = rf.MyTerm()
+	if args.Term < reply.Term {
 		return
 	}
 
-	go func() {
-		rf.applyCh <- ApplyMsg{
-			CommandValid: true,
-			Command:      args.Data,
-			CommandTerm:  args.LastIncludedTerm,
-			CommandIndex: args.LastIncludedIndex,
-		}
-	}()
+	rf.applyCh <- ApplyMsg{
+		CommandValid: true,
+		Command:      args.Data,
+		CommandTerm:  args.LastIncludedTerm,
+		CommandIndex: args.LastIncludedIndex,
+	}
 }
 
 func (rf *Raft) Snapshot(index int, snapshot []byte) {

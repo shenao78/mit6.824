@@ -1,13 +1,5 @@
 package main
 
-import (
-	"fmt"
-	"os"
-	"time"
-
-	"../mr"
-)
-
 //
 // start the master process, which is implemented
 // in ../mr/master.go
@@ -16,6 +8,11 @@ import (
 //
 // Please do not change this file.
 //
+
+import "../mr"
+import "time"
+import "os"
+import "fmt"
 
 func main() {
 	if len(os.Args) < 2 {

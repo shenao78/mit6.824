@@ -78,7 +78,6 @@ func (rf *Raft) electWhenTimeout() {
 }
 
 func (rf *Raft) startElection() {
-	// fmt.Printf("peer:%d start elec\n", rf.me)
 	rf.mu.Lock()
 	rf.toCandidate()
 	rf.mu.Unlock()
