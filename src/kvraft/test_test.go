@@ -735,10 +735,3 @@ func TestSnapshotUnreliableRecoverConcurrentPartitionLinearizable3B(t *testing.T
 	// Test: unreliable net, restarts, partitions, snapshots, linearizability checks (3B) ...
 	GenericTestLinearizability(t, "3B", 15, 7, true, true, true, 1000)
 }
-
-func TestRepeat(t *testing.T) {
-	for i := 0; i < 100; i++ {
-		fmt.Printf("------------------%d---------------\n", i)
-		TestSnapshotUnreliableRecoverConcurrentPartitionLinearizable3B(t)
-	}
-}

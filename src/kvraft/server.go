@@ -2,7 +2,6 @@ package kvraft
 
 import (
 	"encoding/json"
-	"fmt"
 	"log"
 	"sync"
 	"sync/atomic"
@@ -64,10 +63,8 @@ func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 	defer kv.mu.RUnlock()
 
 	if val, ok := kv.store[args.Key]; !ok {
-		fmt.Printf("peer:%d get key:%s, val:%s client id:%d, id:%d\n", kv.me, args.Key, val, args.ClientID, args.ID)
 		reply.Err = ErrNoKey
 	} else {
-		fmt.Printf("peer:%d get key:%s, val:%s client id:%d, id:%d\n", kv.me, args.Key, val, args.ClientID, args.ID)
 		reply.Err = OK
 		reply.Value = val
 	}
@@ -142,10 +139,8 @@ func (kv *KVServer) applyCmd(msg raft.ApplyMsg) {
 		switch cmd.OpName {
 		case PUT:
 			kv.store[cmd.Key] = cmd.Value
-			fmt.Printf("peer:%d (id:%d, client:%d) put key:%s, val:%s store:%v procesed:%v\n", kv.me, cmd.ID, cmd.ClientID,  cmd.Key, cmd.Value, kv.store, kv.processedMsg)
 		case APPEND:
 			kv.store[cmd.Key] += cmd.Value
-			fmt.Printf("peer:%d (id:%d, client:%d) append key:%s, val:%s store:%v, processed:%v\n", kv.me, cmd.ID, cmd.ClientID,  cmd.Key, cmd.Value, kv.store, kv.processedMsg)
 		}
 		kv.processedMsg[cmd.ClientID] = cmd.ID
 	}
@@ -166,7 +161,6 @@ func (kv *KVServer) applySnapshot(msg raft.ApplyMsg) {
 	if ok := kv.rf.CondInstallSnapshot(msg.CommandTerm, msg.CommandIndex, snapshot); ok {
 		snapshotData := readStoreFromSnapshot(snapshot)
 		kv.mu.Lock()
-		fmt.Printf("peer %d install snapshot store:%v lastTerm:%d lastIndex:%d\n", kv.me, snapshotData.Store, msg.CommandTerm, msg.CommandIndex)
 		kv.store = snapshotData.Store
 		kv.processedMsg = snapshotData.ProcessedMsg
 		kv.lastAppliedIndex = msg.CommandIndex
