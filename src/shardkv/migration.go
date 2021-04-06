@@ -48,19 +48,17 @@ func (kv *ShardKV) migrationConfig(config, nextConfig shardmaster.Config) Err {
 
 	newState := make(map[string]string)
 	processedMsg := make(map[int32]UniMsg)
-	if len(newShards) != 0 {
-		if config.Num > 0 {
-			gidToShards := groupShardsByGid(newShards, config.Shards)
-			for gid, shards := range gidToShards {
-				servers := config.Groups[gid]
-				reply := kv.requestState(shards, servers, nextConfig.Num)
-				for key, val := range reply.State {
-					newState[key] = val
-				}
-				for clientID, msg := range reply.ProcessedMsg {
-					if msg.ID > processedMsg[clientID].ID {
-						processedMsg[clientID] = msg
-					}
+	if len(newShards) != 0 && config.Num > 0 {
+		gidToShards := groupShardsByGid(newShards, config.Shards)
+		for gid, shards := range gidToShards {
+			servers := config.Groups[gid]
+			reply := kv.requestState(shards, servers, nextConfig.Num)
+			for key, val := range reply.State {
+				newState[key] = val
+			}
+			for clientID, msg := range reply.ProcessedMsg {
+				if msg.ID > processedMsg[clientID].ID {
+					processedMsg[clientID] = msg
 				}
 			}
 		}
