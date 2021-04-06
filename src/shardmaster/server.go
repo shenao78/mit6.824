@@ -217,10 +217,8 @@ func (sm *ShardMaster) applyCmd(msg raft.ApplyMsg) {
 		switch op.OpName {
 		case JOIN:
 			sm.handleJoin(op)
-			// fmt.Printf("join servers:%v, config:%v\n", op.Servers, sm.latestConfig())
 		case LEAVE:
 			sm.handleLeave(op)
-			// fmt.Printf("leave servers:%v, config:%v\n", op.Servers, sm.latestConfig())
 		case MOVE:
 			sm.handleMove(op)
 		}
